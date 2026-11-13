@@ -16,7 +16,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '3.3.0'
+VERSION = '3.4.0'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
@@ -384,6 +384,60 @@ def spotify_entity(node):
     return None
 
 
+def spotify_cover(data, text):
+    """Самая большая обложка из данных страницы (их там несколько размеров)."""
+    best = [0, '']
+    def walk(node):
+        if isinstance(node, dict):
+            u = node.get('url')
+            if isinstance(u, str) and u.startswith('https://i.scdn.co/image/'):
+                size = max([x for x in (node.get('maxHeight'), node.get('height'), node.get('maxWidth'), node.get('width')) if isinstance(x, (int, float))] or [1])
+                if size > best[0]:
+                    best[:] = [size, u]
+            node = list(node.values())
+        if isinstance(node, list):
+            for x in node:
+                walk(x)
+    walk(data)
+    pic = re.search(r'https://i\.scdn\.co/image/\w+', text)
+    return best[1] or (pic.group(0) if pic else '')
+
+
+def tag_file(path, meta):
+    """Вписывает в скачанный файл исполнителя, название и обложку. Не вышло — файл остаётся как был."""
+    src = Path(path)
+    ext = src.suffix.lower().lstrip('.')
+    tmp, cover = src.with_name(src.stem + '.tagtmp.' + ext), HOME / f'cover{threading.get_ident()}.jpg'
+    try:
+        art = ext in ('mp3', 'm4a', 'flac') and bool(meta.get('thumb'))     # в Opus и WAV картинку ffmpeg не кладёт
+        if art:
+            try:
+                fetch(meta['thumb'], cover, '', BROWSER)
+            except Exception:
+                art = False
+        cmd = [FFMPEG or tool_path('ffmpeg.exe'), '-y', '-hide_banner', '-loglevel', 'error', '-i', str(src)]
+        if art:
+            cmd += ['-i', str(cover), '-map', '0:a', '-map', '1:v', '-c', 'copy', '-disposition:v:0', 'attached_pic',
+                    '-metadata:s:v', 'title=Album cover', '-metadata:s:v', 'comment=Cover (front)']
+        else:
+            cmd += ['-map', '0:a', '-c', 'copy']
+        cmd += ['-metadata', 'title=' + meta['title'], '-metadata', 'artist=' + meta['artist']]
+        cmd += (['-id3v2_version', '3'] if ext == 'mp3' else []) + [str(tmp)]
+        r = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, creationflags=NOWIN, timeout=180)
+        if r.returncode == 0 and tmp.is_file() and tmp.stat().st_size > src.stat().st_size * .5:
+            os.replace(tmp, src)
+            return True
+    except Exception:
+        pass
+    finally:
+        for f in (tmp, cover, cover.with_name(cover.name + '.part')):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    return False
+
+
 def spotify_meta(url):
     """{'artist', 'title', 'thumb', 'dur'} трека по ссылке Spotify."""
     with LOCK:
@@ -398,9 +452,8 @@ def spotify_meta(url):
         data = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page, re.S)
         ent = spotify_entity(json.loads(data.group(1))) if data else None
         if ent:
-            pic = re.search(r'https://i\.scdn\.co/image/\w+', data.group(1))
             got.update(title=ent['name'].strip(), artist=', '.join(a['name'] for a in ent['artists'][:3]).strip(),
-                       thumb=pic.group(0) if pic else '',
+                       thumb=spotify_cover(json.loads(data.group(1)), data.group(1)),
                        dur=ent['duration'] / 1000 if isinstance(ent.get('duration'), (int, float)) else None)
     except Exception:
         pass
@@ -826,6 +879,9 @@ def run_job(job):
             if plan:
                 job.update(pct=0 if plan['v'][:2] != ['-c:v', 'copy'] and plan['v'] != ['-vn'] else 100, stage=plan['stage'], post=True)
                 code, err, tail = finish(job, plan)
+        if code == 0 and job['status'] != 'cancel' and job.get('src') == 'spotify' and job.get('file') and os.path.isfile(job['file']) and have(TOOLS[1]):
+            job.update(stage='Подписываю файл')
+            tag_file(job['file'], spotify_meta(job['url']))
     except Plain as e:
         code, err, tail = 1, str(e), []
         job['_say'] = str(e)
