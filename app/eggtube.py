@@ -17,7 +17,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '3.4.1'
+VERSION = '3.5.0'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
@@ -72,7 +72,7 @@ PT_MAX, PT_GAIN, PT_F, PT_Q = 12, 18, (20, 20000), (0.3, 8)
 PT_SOFT = 1.5        # полкам узкая добротность не нужна: даёт горб рядом с частотой
 CUT_FLAT, CUT_Q, CUT_STEPS = 0.71, (0.5, 3.0), 4   # срез: ровный склон при 0.71; крутизна 12, 24, 36 или 48 дБ/окт
 FS = 48000
-DEFAULTS = {'dir': '', 'kind': 'video', 'quality': '1080', 'vcodec': 'h264', 'aformat': 'mp3', 'theme': 'dark', 'lang': 'ru', 'layout': 'wide', 'size': None, 'tray': True, 'tray_told': False, 'clip': True, 'proxy': '', 'cookies': '',
+DEFAULTS = {'dir': '', 'kind': 'video', 'quality': '1080', 'vcodec': 'h264', 'aformat': 'mp3', 'theme': 'dark', 'lang': 'ru', 'layout': 'wide', 'size': None, 'tray': True, 'tray_told': False, 'seen': '', 'clip': True, 'proxy': '', 'cookies': '',
             'history': [], 'lnk': '', 'eq': [0] * 10, 'eq_mode': 'bands', 'eq_points': []}
 HISTORY_MAX = 40
 
@@ -343,6 +343,9 @@ def install_tool(t):
 # Spotify отдаёт музыку только с защитой (DRM), сам звук оттуда взять нельзя. Поэтому со страницы трека берём
 # исполнителя и название, а запись ищем на YouTube и качаем оттуда.
 SPOT = {}
+PICK = {}
+GUI = {'on': False}
+BROWSE = threading.Lock()
 SPOT_PIC = r'https://(?:i\.scdn\.co|[\w.-]+\.spotifycdn\.com)/image/\w+'      # обложки лежат на разных адресах
 BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
 SPOT_ONLY = 'Со Spotify качаются только отдельные треки: вставь ссылку на трек, а не на альбом или плейлист.'
@@ -379,6 +382,29 @@ def web_text(url, way=''):
             try:
                 f.unlink()
             except OSError:
+                pass
+
+
+def browser_text(url, script, wait=15):
+    """Открывает адрес в невидимом окне программы и возвращает то, что вернул script. Окно — настоящий браузер,
+    поэтому сайт отдаёт ему ту же страницу, что и человеку (простому запросу Spotify отдаёт заглушку)."""
+    import webview
+    with BROWSE:
+        loaded = threading.Event()
+        w = webview.create_window('spotify', url, hidden=True, width=480, height=320)
+        try:
+            w.events.loaded += lambda *a: loaded.set()
+            loaded.wait(wait)
+            for _ in range(16):
+                got = w.evaluate_js(script)
+                if got:
+                    return str(got)
+                time.sleep(.4)
+            return ''
+        finally:
+            try:
+                w.destroy()
+            except Exception:
                 pass
 
 
@@ -461,19 +487,31 @@ def spotify_meta(url):
         raise Plain(SPOT_ONLY)
     got = {'artist': '', 'title': '', 'thumb': '', 'dur': None}
     tid, seen = m.group(1), []
+
+    def embed(text, how):
+        ent = spotify_entity(json.loads(text)) if text else None
+        if not ent:
+            seen.append(f'embed/{how}: данных трека нет ({len(text or "")} симв.)')
+            return False
+        got.update(title=ent['name'].strip(), artist=', '.join(a['name'] for a in ent['artists'][:3]).strip(),
+                   thumb=spotify_cover(json.loads(text), text),
+                   dur=ent['duration'] / 1000 if isinstance(ent.get('duration'), (int, float)) else None)
+        return bool(got['title'] and got['artist'])
+
+    if GUI['on']:                           # надёжнее всего: открыть страницу трека в невидимом окне-браузере
+        try:
+            embed(browser_text(f'https://open.spotify.com/embed/track/{tid}',
+                               "(function(){var e=document.getElementById('__NEXT_DATA__');return e?e.textContent:''})()"), 'окно')
+        except Exception as e:
+            seen.append(f'embed/окно: {e}'[:160])
     for way in (('curl', '') if WIN else ('',)):
         if got['title'] and got['artist']:
             break
-        try:                                # страница встраиваемого плеера: в ней лежат данные трека
+        try:                                # то же простым запросом
             page = web_text(f'https://open.spotify.com/embed/track/{tid}', way)
             data = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page, re.S)
-            ent = spotify_entity(json.loads(data.group(1))) if data else None
-            if ent:
-                got.update(title=ent['name'].strip(), artist=', '.join(a['name'] for a in ent['artists'][:3]).strip(),
-                           thumb=spotify_cover(json.loads(data.group(1)), data.group(1)),
-                           dur=ent['duration'] / 1000 if isinstance(ent.get('duration'), (int, float)) else None)
+            if embed(data.group(1) if data else '', way or 'python'):
                 break
-            seen.append(f'embed/{way or "python"}: ' + ' '.join(re.findall(r'<title>(.*?)</title>', page, re.S))[:80])
         except Exception as e:
             seen.append(f'embed/{way or "python"}: {e}'[:160])
         try:                                # обычная страница трека: название и исполнитель в её заголовке
@@ -487,18 +525,11 @@ def spotify_meta(url):
             seen.append(f'track/{way or "python"}: ' + ' '.join(re.findall(r'<title>(.*?)</title>', page, re.S))[:80])
         except Exception as e:
             seen.append(f'track/{way or "python"}: {e}'[:160])
-        try:                                # на худой конец хотя бы название и обложка
-            card = json.loads(web_text('https://open.spotify.com/oembed?url=' + urllib.parse.quote(f'https://open.spotify.com/track/{tid}', safe=''), way))
-            if isinstance(card.get('title'), str) and card['title'].strip():
-                got.update(title=card['title'].strip(), thumb=card.get('thumbnail_url') or '')
-        except Exception as e:
-            seen.append(f'oembed/{way or "python"}: {e}'[:160])
-    if not got['title']:
+    if not (got['title'] and got['artist']):   # без исполнителя по одному названию находится чужая песня: лучше честно отказать
         try:
             (HOME / 'spotify.log').write_text('\n'.join([url, *seen]), 'utf-8')
         except OSError:
             pass
-    if not got['title']:
         raise Plain(SPOT_FAIL)
     with LOCK:
         SPOT[url] = got
@@ -509,12 +540,54 @@ def spotify_name(meta):
     return ' — '.join(x for x in (meta['artist'], meta['title']) if x)
 
 
+SPOT_OFF = ('live', 'cover', 'remix', 'karaoke', 'slowed', 'sped up', 'nightcore', 'instrumental', 'reaction', '8d', 'концерт', 'кавер')
+
+
+def spotify_pick(meta):
+    """Ищет трек на YouTube и выбирает из первых результатов подходящий: та же длина, тот же исполнитель,
+    не концерт и не кавер. Первый попавшийся результат часто оказывается не той записью."""
+    query = ' - '.join(x for x in (meta['artist'], meta['title']) if x)
+    env = dict(os.environ, PATH=str(BIN) + os.pathsep + os.environ.get('PATH', ''), PYTHONIOENCODING='utf-8')
+    try:
+        r = subprocess.run(ytdlp_cmd() + ['--ignore-config', '--no-colors', '--encoding', 'utf-8', '--flat-playlist', '--socket-timeout', '20',
+                                          '--retries', '3', '--print', 'JT_HIT:%(id)s|%(duration)s|%(channel)s|%(title)s'] + net_args(load())
+                           + ['--', 'ytsearch8:' + query], capture_output=True, stdin=subprocess.DEVNULL, env=env, creationflags=NOWIN,
+                           timeout=90, encoding='utf-8', errors='replace')
+        lines = r.stdout.splitlines()
+    except Exception:
+        lines = []
+    best, low_q, first = (None, -99), query.lower(), meta['artist'].split(',')[0].strip().lower()
+    for i, line in enumerate(x for x in lines if x.startswith('JT_HIT:')):
+        m = re.match(r'JT_HIT:([\w-]{6,})\|([^|]*)\|([^|]*)\|(.*)', line)
+        if not m:
+            continue
+        vid, dur, chan, title = m.group(1), num(m.group(2)), m.group(3).strip(), m.group(4).strip()
+        text = (title + ' ' + chan).lower()
+        score = -i
+        if meta.get('dur') and dur:
+            diff = abs(dur - meta['dur'])
+            score += 8 if diff <= 2 else 4 if diff <= 6 else 0 if diff <= 20 else -8
+        score += 4 if chan.endswith(' - Topic') else 0             # так YouTube называет каналы с официальными записями
+        score += 3 if first and first in text else -3
+        score += 3 if meta['title'].lower() in title.lower() else -3
+        score -= sum(5 for bad in SPOT_OFF if re.search(r'(?<!\w)' + re.escape(bad) + r'(?!\w)', text) and bad not in low_q)
+        if score > best[1]:
+            best = (vid, score)
+    return 'https://www.youtube.com/watch?v=' + best[0] if best[0] else 'ytsearch1:' + query
+
+
 def source(url):
-    """Что отдать yt-dlp: саму ссылку или, для Spotify, поиск этого трека на YouTube."""
+    """Что отдать yt-dlp: саму ссылку или, для Spotify, найденную на YouTube запись этого трека."""
     if not is_spotify(url):
         return url
     meta = spotify_meta(url)
-    return 'ytsearch1:' + ' - '.join(x for x in (meta['artist'], meta['title']) if x)
+    with LOCK:
+        if url in PICK:
+            return PICK[url]
+    pick = spotify_pick(meta)
+    with LOCK:
+        PICK[url] = pick
+    return pick
 
 
 # ---------- обновление самой программы ----------
@@ -664,6 +737,7 @@ def build_args(job, st, simple=False):
         '--windows-filenames', '--no-mtime', '--progress', '--no-simulate',
         '--no-quiet', '--verbose',           # --print включает тихий режим, а в нём не видно ни повторов, ни причин задержки
         '--socket-timeout', '15', '--retries', '10', '--fragment-retries', '10', '--retry-sleep', '1',
+        '--http-chunk-size', '10M',          # короткие запросы: длинное соединение с YouTube у некоторых рвётся на середине
         '--concurrent-fragments', '4',       # если дорожка всё же кусочная, качать по четыре куска разом
         '--paths', str(out_dir(st)), '--output', (job.get('_name') or '%(title).120B') + ' [%(id)s]' + (' EQ' if eq else '') + '.%(ext)s',
         '--print', 'before_dl:JT_ID:%(id)s',
@@ -1138,7 +1212,11 @@ class Api:
             (UPD / 'starting').unlink()      # окно открылось: обновление годное
         except OSError:
             pass
-        return {'version': VERSION, 'bands': list(EQ_BANDS), 'eq_max': EQ_MAX,
+        fresh = UPDATED and st['seen'] != VERSION           # первый запуск после обновления: сказать об этом
+        if st['seen'] != VERSION:
+            st['seen'] = VERSION
+            save(st)
+        return {'version': VERSION, 'updated': fresh, 'bands': list(EQ_BANDS), 'eq_max': EQ_MAX,
                 'pt': {'max': PT_MAX, 'gain': PT_GAIN, 'f': PT_F, 'q': PT_Q, 'soft': PT_SOFT, 'fs': FS,
                        'flat': CUT_FLAT, 'cutq': CUT_Q, 'steps': CUT_STEPS},
                 'settings': {k: st[k] for k in ('kind', 'quality', 'vcodec', 'aformat', 'theme', 'lang', 'layout', 'tray', 'clip', 'proxy', 'cookies',
@@ -1591,6 +1669,7 @@ def gui():
 
     def started():
         w.events.shown.wait(10)
+        GUI['on'] = WIN
         titlebar(load()['theme'])
 
     w.events.closing += closing
