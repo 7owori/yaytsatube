@@ -36,7 +36,20 @@ main{height:100vh}
 .chip.corner:hover{background:var(--cornerHi)}
 .chip.corner[aria-pressed=true]{background:var(--cornerOn)}
 .chip.corner.new::after{content:'';width:7px;height:7px;margin-left:2px;border-radius:50%;background:var(--accent)}
-.link.new{color:var(--accent)}
+.link.new{color:var(--accent);animation:nudge .5s ease-out}
+.chip.corner.new::after{animation:popin .35s cubic-bezier(.3,.7,.3,1)}
+.link.busy{display:inline-flex;align-items:center;gap:7px}
+.link.busy:disabled{opacity:.85}
+.link.busy::before{content:'';width:11px;height:11px;border-radius:50%;border:1.6px solid currentColor;border-right-color:transparent;animation:turn .7s linear infinite}
+@keyframes turn{to{transform:rotate(360deg)}}
+@keyframes popin{0%{opacity:0;transform:translateY(4px) scale(.96)}60%{transform:translateY(-1px) scale(1.02)}100%{opacity:1;transform:none}}
+@keyframes nudge{0%,100%{transform:none}30%{transform:translateY(-3px)}60%{transform:translateY(1px)}}
+.pop{display:inline-block;animation:popin .35s cubic-bezier(.3,.7,.3,1)}
+#kindSeg .chip:disabled{opacity:.35;pointer-events:none}
+#kindSeg .chip{transition:opacity .2s,background .12s,color .12s}
+.wave{transition:fill .5s}
+#bigEgg.spot .wave{fill:#1ED760}
+#bigEgg.spot .wave.back{fill:#12843C}
 .chip.corner svg{width:11px;height:14px;overflow:visible}
 .back{align-self:flex-start;margin:-14px 0 14px -7px;flex:none}
 .head{flex:none;display:flex;align-items:center;gap:20px}
@@ -361,9 +374,6 @@ body.boot .corner{animation:fade .6s ease-out .55s backwards}
     <div class="row"><span>Тема</span><span></span><div class="pill" id="themeSeg" role="group" aria-label="Тема">
       <button data-v="dark" aria-label="Тёмная тема" title="Тёмная тема"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 9.9A5.6 5.6 0 0 1 6.1 2.8a5.6 5.6 0 1 0 7.1 7.1Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
       <button data-v="light" aria-label="Светлая тема" title="Светлая тема"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.7" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M3.5 12.5l1.1-1.1M11.4 4.6l1.1-1.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></div></div>
-    <div class="row"><span>Окно</span><span></span><div class="pill" id="layoutSeg" role="group" aria-label="Окно">
-      <button data-v="wide" aria-label="Горизонтальное окно" title="Горизонтальное окно"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.7" y="3.7" width="12.6" height="8.6" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></button>
-      <button data-v="tall" aria-label="Вертикальное окно" title="Вертикальное окно"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.2" y="1.7" width="7.6" height="12.6" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></button></div></div>
     <div class="row"><span>Ссылка из буфера</span><button class="toggle" id="clipBtn" onclick="toggleClip()"><i class="sq" id="clipSq"></i><span>подставлять, когда открываю окно</span></button><span></span></div>
     <div class="row"><span>При закрытии</span><button class="toggle" id="trayBtn" onclick="toggleTray()"><i class="sq" id="traySq"></i><span>сворачивать в трей и качать дальше</span></button><span></span></div>
     <div class="row"><span>Прокси</span><input id="proxy" type="text" spellcheck="false" autocomplete="off" placeholder="не используется" aria-label="Прокси"><span class="result" id="proxyResult" aria-live="polite"></span></div>
@@ -406,7 +416,9 @@ const EN = {
   'Окно': 'Window', 'Горизонтальное окно': 'Wide window', 'Вертикальное окно': 'Tall window',
   'При закрытии': 'On close', 'сворачивать в трей и качать дальше': 'minimize to the tray and keep downloading',
   'Компоненты не скачались. Проверь интернет и нажми «Обновить»; если GitHub у тебя не открывается, укажи прокси выше.': 'Components could not be downloaded. Check your connection and press Update; if GitHub does not open for you, set a proxy above.',
-  'Версия': 'Version', 'Проверить обновления': 'Check for updates', 'Проверяю…': 'Checking…', 'Обновляю…': 'Updating…', 'Скачано. Запусти программу заново': 'Downloaded. Start the app again',
+  'Версия': 'Version', 'звук возьму с YouTube': 'audio comes from YouTube', 'Ищу трек': 'Looking for the track',
+  'Со Spotify качаются только отдельные треки: вставь ссылку на трек, а не на альбом или плейлист.': 'Only single Spotify tracks work: paste a track link, not an album or playlist.',
+  'Не получилось узнать название трека на Spotify. Проверь интернет или укажи прокси в настройках.': 'Could not read the track name from Spotify. Check your connection or set a proxy in settings.', 'Проверить обновления': 'Check for updates', 'Проверяю…': 'Checking…', 'Обновляю…': 'Updating…', 'Скачано. Запусти программу заново': 'Downloaded. Start the app again',
   'Обновление не скачалось. Проверь интернет; если GitHub у тебя не открывается, укажи прокси выше.': 'The update did not download. Check your connection; if GitHub does not open for you, set a proxy above.', 'Компоненты': 'Components', 'Обновить': 'Update',
   'Эквалайзер у видео меняет только звук, картинка остаётся как есть. H.265 и ProRes программа перекодирует сама: это долго, а ProRes ещё и очень большой.':
     'On video the equalizer only changes the sound; the picture is left as it is. H.265 and ProRes are converted on your computer: that takes a while, and ProRes files are very large.',
@@ -452,7 +464,7 @@ const EN = {
 };
 /* составные строки (с числами и названиями) переводятся по кускам, длинные куски раньше коротких */
 const EN_PARTS = [
-  [/Обновить до /, 'Update to '], [/ · последняя версия/, ' · latest version'],
+  [/Обновить до /, 'Update to '], [/последняя версия/, 'latest version'],
   [/Связь рвётся, попытка (\d+) из (\d+)/, 'Connection keeps dropping, try $1 of $2'], [/Связь оборвалась, захожу заново \((\d+) из (\d+)\)/, 'Connection lost, starting over ($1 of $2)'],
   [/Не удалось скачать компоненты \(/, 'Could not fetch components ('], [/\)\. Проверь интернет и нажми «Обновить» в настройках\./, '). Check your connection and press Update in Settings.'],
   [/Первый запуск, докачиваю компоненты: /, 'First run, fetching components: '], [/Докачиваю компоненты: /, 'Fetching components: '], [/Обновляю компоненты: /, 'Updating components: '],
@@ -612,6 +624,18 @@ document.addEventListener('keydown', e => {
 });
 window.addEventListener('resize', menuClose);
 function setKind(v) { S.settings.kind = v; showKind(); api().put('kind', v); }
+/* ссылка на Spotify: оттуда берётся только звук, поэтому «Видео» гаснет, пока не вставят другую ссылку */
+const isSpot = u => /^https?:\/\/([\w-]+\.)*spotify\.(com|link)\//i.test(u || '');
+let spotOn = false, spotBack = '';
+function setSpot(on) {
+  if (on == spotOn) return;
+  spotOn = on;
+  const video = $('kindSeg').querySelector('[data-v=video]');
+  video.disabled = on;
+  if (on && S.settings.kind == 'video') { spotBack = 'video'; S.settings.kind = 'audio'; }
+  else if (!on && spotBack) { S.settings.kind = spotBack; spotBack = ''; }
+  seg('kindSeg', S.settings.kind, v => { spotBack = ''; setKind(v); }); showKind();
+}
 function showKind() {
   const audio = S.settings.kind == 'audio';
   $('qChip').hidden = $('vcChip').hidden = audio; $('acChip').hidden = !audio;
@@ -977,6 +1001,7 @@ async function cardLook(now) {       // ссылка поменялась: чу�
   const m = $('url').value.match(/https?:\/\/[^\s<>"']+/), url = m ? m[0] : '';
   if (url == infoUrl) return;
   infoUrl = url; const run = ++infoRun;
+  setSpot(isSpot(url));
   if (!url) { cardShow(''); api().info_start(''); return; }
   infoTimer = setTimeout(async () => {
     const r = await api().info_start(url);
@@ -986,7 +1011,7 @@ async function cardLook(now) {       // ссылка поменялась: чу�
     let st;
     do { await sleep(300); st = await api().info_state(); } while (run == infoRun && st.status == 'loading');
     if (run != infoRun) return;
-    if (st.status == 'ready') cardShow('ok', st.title, [st.author, st.dur ? clock(st.dur) : ''].filter(Boolean).join(' · '), st.thumb);
+    if (st.status == 'ready') cardShow('ok', st.title, [isSpot(url) ? 'Spotify · ' + t('звук возьму с YouTube') : st.author, st.dur ? clock(st.dur) : ''].filter(Boolean).join(' · '), st.thumb);
     else cardShow('bad', st.error || 'Не получилось узнать, что это за видео.', url);
   }, now ? 0 : 500);
 }
@@ -1051,6 +1076,7 @@ function renderJobs(jobs) {
   // большое яйцо наполняется по ходу загрузки (волны ходят, пока идёт работа), в покое целое; на старте подпрыгивает
   $('eggFill').style.transform = 'translateY(' + (run ? 72 - 72 * run.pct / 100 : -10) + 'px)';
   $('bigEgg').classList.toggle('live', !!run);
+  if (run) $('bigEgg').classList.toggle('spot', run.src == 'spotify');      // трек со Spotify: яйцо наполняется зелёным
   if (run && run.id != runId) egg('jump');
   runId = run ? run.id : 0;
   $('tLoad').textContent = run ? (run.stage == 'Качаю' || /^Перекодирую/.test(run.stage) ? run.stage + ' · ' + num(run.pct, 0) + '%' : run.stage || 'Ищу видео')
@@ -1080,20 +1106,29 @@ function renderTools(t) {
   $('status').title = t.error || '';
   $('status').classList.toggle('busy', t.busy);
 }
-function renderUpdate(u) {
+let updSeen = '', updHold = 0;
+function renderUpdate(u, draft) {
   if (!u) return;
-  S.update = u;
-  const b = $('updBtn'), busy = u.state == 'check' || u.state == 'load', found = u.state == 'found';
-  b.textContent = u.state == 'check' ? 'Проверяю…' : u.state == 'load' ? 'Обновляю…' : found ? 'Обновить до ' + u.ver : 'Проверить обновления';
-  b.disabled = busy; b.classList.toggle('new', found);
+  if (!draft) S.update = u;
+  const hold = Date.now() < updHold && u.state != 'load';          // проверка мгновенная: дать кружку докрутиться
+  const state = hold ? 'check' : u.state, b = $('updBtn'), busy = state == 'check' || state == 'load', found = state == 'found';
+  if (state == updSeen) return;
+  const was = updSeen; updSeen = state;
+  b.textContent = state == 'check' ? 'Проверяю…' : state == 'load' ? 'Обновляю…' : found ? 'Обновить до ' + u.ver : 'Проверить обновления';
+  b.disabled = busy; b.classList.toggle('busy', busy); b.classList.toggle('new', found);
   document.querySelector('.corner.tr').classList.toggle('new', found);
-  $('vVer').textContent = 'Яйцатюб ' + S.version + ' · by owori' + (u.state == 'fresh' ? ' · последняя версия' : '');
-  $('updErr').hidden = u.state != 'error'; $('updErrText').textContent = u.error || '';
+  const v = $('vVer');
+  v.textContent = 'Яйцатюб ' + S.version + ' · by owori' + (state == 'fresh' ? ' · ✓ последняя версия' : '');
+  if (was && !busy) { v.classList.remove('pop'); void v.offsetWidth; v.classList.add('pop'); }
+  $('updErr').hidden = state != 'error'; $('updErrText').textContent = u.error || '';
 }
 async function updClick() {
-  const r = await api().update_check(S.update && S.update.state == 'found');
-  if (r.error) say('proxyResult', r.error, true);
-  refresh();
+  const apply = S.update && S.update.state == 'found';
+  const r = await api().update_check(apply);
+  if (r.error) return say('proxyResult', r.error, true);
+  updHold = Date.now() + 900;
+  renderUpdate({state: apply ? 'load' : 'check', ver: (S.update || {}).ver || '', error: ''}, true);
+  setTimeout(refresh, 950);
 }
 async function toolsUpdate() {
   const r = await api().tools_update();
@@ -1180,9 +1215,6 @@ async function start() {
   seg('kindSeg', S.settings.kind, setKind);
   setTheme(S.settings.theme, true); seg('themeSeg', S.settings.theme, v => setTheme(v));
   eqBuild(); showKind(); prevShow();
-  seg('layoutSeg', S.settings.layout, v => { S.settings.layout = v; api().put('layout', v); });
-  const shape = () => $('layoutSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v == (innerWidth <= 700 ? 'tall' : 'wide')));
-  addEventListener('resize', shape); shape();        // окно потянули мышью: вид и переключатель подстраиваются сами
   seg('langSeg', S.settings.lang, v => setLang(v)); if (S.settings.lang != 'ru') setLang(S.settings.lang, true);
   chipText();
   $('clipSq').classList.toggle('on', S.settings.clip); $('traySq').classList.toggle('on', S.settings.tray);
