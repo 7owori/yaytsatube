@@ -15,14 +15,18 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '3.0.0'
+VERSION = '3.2.0'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
-ASSETS = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
+UPDATED = bool(globals().get('UPDATED'))   # этот код не из exe, а из папки обновления (см. run_update)
+ASSETS = Path(__file__).parent if UPDATED else Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
 HOME = Path(os.environ.get('EGGTUBE_HOME') or Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'EggTube')
 STATE = HOME / 'state.json'
 BIN = HOME / 'bin'
+UPD = HOME / 'update'                 # свежий код программы, скачанный с GitHub кнопкой «Проверить обновления»
+REPO = '7owori/yaytsatube'
+SOURCES = (f'https://raw.githubusercontent.com/{REPO}/main/', f'https://cdn.jsdelivr.net/gh/{REPO}@main/')
 LOG = HOME / 'last.log'
 PREV_DIR = HOME / 'preview'
 PREV_CUTS = ('*30-60', '*0-30')   # отрывок для прослушивания: с 30-й секунды, а у коротких роликов с начала
@@ -55,6 +59,7 @@ VCODEC_OLD = {'auto': 'h264'}   # настройки прошлых версий
 ACODECS = {'mp3': ['-c:a', 'libmp3lame', '-q:a', '0'], 'm4a': ['-c:a', 'aac', '-b:a', '256k'],          # чем кодировать звук в ffmpeg
            'opus': ['-c:a', 'libopus', '-b:a', '160k'], 'flac': ['-c:a', 'flac'], 'wav': ['-c:a', 'pcm_s16le']}
 FFMPEG = os.environ.get('EGGTUBE_FFMPEG')   # только для проверок
+SIZES = {'wide': (1040, 720), 'tall': (520, 860)}      # форма окна: горизонтальная или вертикальная
 # тема -> фон окна и цвета заголовка Windows (тёмный режим, рамка, шапка, текст; цвета в порядке BGR)
 THEMES = {'dark': ('#191919', ((20, 1), (34, 0x202020), (35, 0x202020), (36, 0xD4D4D4))),
           'light': ('#F7F6F3', ((20, 0), (34, 0xDDE2E4), (35, 0xF3F6F7), (36, 0x2D2F2F)))}
@@ -65,13 +70,15 @@ PT_MAX, PT_GAIN, PT_F, PT_Q = 12, 18, (20, 20000), (0.3, 8)
 PT_SOFT = 1.5        # полкам узкая добротность не нужна: даёт горб рядом с частотой
 CUT_FLAT, CUT_Q, CUT_STEPS = 0.71, (0.5, 3.0), 4   # срез: ровный склон при 0.71; крутизна 12, 24, 36 или 48 дБ/окт
 FS = 48000
-DEFAULTS = {'dir': '', 'kind': 'video', 'quality': '1080', 'vcodec': 'h264', 'aformat': 'mp3', 'theme': 'dark', 'lang': 'ru', 'tray': True, 'tray_told': False, 'clip': True, 'proxy': '', 'cookies': '',
+DEFAULTS = {'dir': '', 'kind': 'video', 'quality': '1080', 'vcodec': 'h264', 'aformat': 'mp3', 'theme': 'dark', 'lang': 'ru', 'layout': 'wide', 'size': None, 'tray': True, 'tray_told': False, 'clip': True, 'proxy': '', 'cookies': '',
             'history': [], 'lnk': '', 'eq': [0] * 10, 'eq_mode': 'bands', 'eq_points': []}
 HISTORY_MAX = 40
 
 LOCK = threading.RLock()
 JOBS = []
 WAKE = threading.Event()
+UPDATE = {'state': 'idle', 'ver': '', 'error': ''}   # idle | check | fresh | found | load | error
+RESTART = {'on': False, 'quit': None}
 TOOL = {'busy': False, 'step': '', 'done': 0, 'total': 0, 'error': '', 'ver': ''}
 SEQ = [0]
 INFO = {'status': 'idle', 'url': '', 'title': '', 'thumb': '', 'author': '', 'dur': None, 'error': '', 'proc': None, 'n': 0}
@@ -100,6 +107,11 @@ def load():
         st['theme'] = 'dark'
     if st.get('lang') not in ('ru', 'en'):
         st['lang'] = 'ru'
+    if st.get('layout') not in SIZES:
+        st['layout'] = 'wide'
+    sz = st.get('size')
+    if not (isinstance(sz, list) and len(sz) == 2 and all(isinstance(x, int) and 300 <= x <= 10000 for x in sz)):
+        st['size'] = None
     return st
 
 
@@ -223,23 +235,50 @@ def tool(name):
     return BIN / name
 
 
+def own(name):
+    p = tool(name)
+    return p.is_file() and p.stat().st_size > 100000
+
+
+def tool_path(name):
+    """Где лежит компонент: сначала свой, скачанный программой, потом установленный в системе (PATH)."""
+    return str(tool(name)) if own(name) else shutil.which(name)
+
+
 def have(t):
-    return all(tool(n).is_file() and tool(n).stat().st_size > 100000 for n in t['need'])
+    return all(tool_path(n) for n in t['need'])
 
 
 def tools_view():
     with LOCK:
         v = dict(TOOL)
     v['have'] = {t['id']: have(t) for t in TOOLS}
+    v['system'] = [t['id'] for t in TOOLS if have(t) and not all(own(n) for n in t['need'])]   # взяты из системы
     v['ready'] = bool(YTDLP) or v['have']['yt-dlp']
     return v
 
 
+def curl(url, part, proxy=''):
+    r = subprocess.run(['curl.exe', '-L', '--fail', '--silent', '--show-error', '--retry', '2', '--connect-timeout', '20']
+                       + (['-x', proxy] if proxy else []) + ['-o', str(part), url],
+                       capture_output=True, stdin=subprocess.DEVNULL, creationflags=NOWIN)
+    if r.returncode:
+        raise OSError('curl: ' + (r.stderr.decode('utf-8', 'replace').strip()[-200:] or f'код {r.returncode}'))
+
+
 def fetch(url, dest, label):
-    """Качает файл с прогрессом. Если Python не смог (сертификаты, прокси) — пробует curl из Windows."""
+    """Качает файл с прогрессом. Если в настройках указан прокси, идёт через него (curl умеет и socks).
+    Если Python не смог (сертификаты, блокировка) — пробует curl из Windows."""
     part = dest.with_name(dest.name + '.part')
+    proxy = load().get('proxy') or ''
     with LOCK:
         TOOL.update(step=label, done=0, total=0)
+    if WIN and proxy:
+        try:
+            curl(url, part, proxy)
+            return os.replace(part, dest)
+        except OSError:
+            pass                              # прокси не помог: пробуем напрямую
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'EggTube/' + VERSION})
         with urllib.request.urlopen(req, timeout=40) as r, open(part, 'wb') as f:
@@ -258,14 +297,14 @@ def fetch(url, dest, label):
     except Exception as first:
         if not WIN:
             raise
-        r = subprocess.run(['curl.exe', '-L', '--fail', '--silent', '--show-error', '--retry', '2',
-                            '-o', str(part), url], capture_output=True, stdin=subprocess.DEVNULL, creationflags=NOWIN)
-        if r.returncode:
-            raise OSError(f'{first}; curl: {r.stderr.decode("utf-8", "replace").strip()[-200:]}')
+        try:
+            curl(url, part)
+        except OSError as second:
+            raise OSError(f'{type(first).__name__}: {first}; {second}')
     os.replace(part, dest)
 
 
-def install(t):
+def install_tool(t):
     BIN.mkdir(parents=True, exist_ok=True)
     if not t['url'].endswith('.zip'):
         fresh = tool(t['need'][0] + '.new')
@@ -298,6 +337,96 @@ def install(t):
         raise OSError('в архиве нет нужных файлов')
 
 
+# ---------- обновление самой программы ----------
+def ver(s):
+    return tuple(int(x) for x in re.findall(r'\d+', s or '')[:3])
+
+
+def code_version(text):
+    m = re.search(r"^VERSION = '([\d.]+)'", text, re.M)
+    return m.group(1) if m else ''
+
+
+def grab(name, dest):
+    """Файл из репозитория на GitHub; если GitHub не отдал — с его зеркала."""
+    last = None
+    for base in SOURCES:
+        try:
+            return fetch(base + name, dest, 'обновление')
+        except Exception as e:
+            last = e
+    raise last
+
+
+def update_run(apply):
+    """Проверка (apply=False) смотрит номер версии на GitHub. Обновление качает новый код в папку UPD и перезапускает
+    программу: exe остаётся прежним, при запуске он берёт код из этой папки (run_update). Установка заново не нужна."""
+    tmp = HOME / 'update.new'
+    try:
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True)
+        grab('app/eggtube.py', tmp / 'eggtube.py')
+        code = (tmp / 'eggtube.py').read_text(encoding='utf-8')
+        new = code_version(code)
+        if not new:
+            raise OSError('на GitHub лежит что-то не то')
+        if ver(new) <= ver(VERSION):
+            with LOCK:
+                UPDATE.update(state='fresh', ver='', error='')
+            return
+        if not apply:
+            with LOCK:
+                UPDATE.update(state='found', ver=new, error='')
+            return
+        with LOCK:
+            UPDATE.update(state='load', ver=new, error='')
+        grab('app/ui.html', tmp / 'ui.html')
+        compile(code, 'eggtube.py', 'exec')                       # битый файл не должен стать программой
+        if '</html>' not in (tmp / 'ui.html').read_text(encoding='utf-8')[-200:]:
+            raise OSError('интерфейс скачан не целиком')
+        ico = ASSETS / 'icon.ico'
+        try:
+            shutil.copyfile(ico if ico.is_file() else ASSETS.parent / 'assets' / 'icon.ico', tmp / 'icon.ico')
+        except OSError:
+            pass                              # без значка в трее жить можно, без обновления — нет
+        shutil.rmtree(UPD, ignore_errors=True)
+        os.replace(tmp, UPD)
+        if WIN and FROZEN and RESTART['quit']:
+            RESTART['on'] = True
+            RESTART['quit']()
+        else:
+            with LOCK:
+                UPDATE.update(state='error', ver=new, error='Скачано. Запусти программу заново')
+    except Exception as e:
+        with LOCK:
+            UPDATE.update(state='error', error=str(e)[:200])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_update():
+    """При запуске: если в папке обновления код новее встроенного в exe — работает он. Метка starting страхует от
+    обновления, которое не смогло открыть окно: в следующий раз оно будет выброшено, и запустится встроенный код."""
+    src, mark = UPD / 'eggtube.py', UPD / 'starting'
+    try:
+        code = src.read_text(encoding='utf-8')
+        if mark.exists() or ver(code_version(code)) <= ver(VERSION):
+            raise ValueError
+        obj = compile(code, str(src), 'exec')
+        mark.write_text('1')
+    except Exception:
+        shutil.rmtree(UPD, ignore_errors=True)
+        return False
+    try:
+        exec(obj, {'__name__': '__main__', '__file__': str(src), 'UPDATED': True})
+    except Exception:
+        if not mark.exists():
+            raise                           # окно уже открывалось: это обычная ошибка, а не негодное обновление
+        shutil.rmtree(UPD, ignore_errors=True)
+        return False
+    return True
+
+
 def ytdlp_version():
     try:
         r = subprocess.run(ytdlp_cmd() + ['--version'], capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=60,
@@ -316,15 +445,15 @@ def prepare(force=False):
     errors, ver = [], ''
     try:
         for t in TOOLS:
-            old = t['id'] == 'yt-dlp' and have(t) and \
+            old = t['id'] == 'yt-dlp' and own('yt-dlp.exe') and \
                 time.time() - tool('yt-dlp.exe').stat().st_mtime > FRESH_DAYS * 86400
             if YTDLP or (have(t) and not force and not old):
                 continue
             try:
-                install(t)
+                install_tool(t)
             except Exception as e:
                 if not have(t):
-                    errors.append(f'{t["id"]}: {e}')
+                    errors.append(f'{t["id"]}: {e}'[:300])
         ver = ytdlp_version()
     finally:
         with LOCK:
@@ -336,12 +465,12 @@ def prepare(force=False):
 def ytdlp_cmd():
     if YTDLP:
         return [sys.executable, YTDLP]
-    return [str(tool('yt-dlp.exe'))]
+    return [tool_path('yt-dlp.exe') or str(tool('yt-dlp.exe'))]
 
 
 # ---------- загрузка ----------
 def net_args(st):
-    a = ['--ffmpeg-location', str(BIN)] if have(TOOLS[1]) else []
+    a = ['--ffmpeg-location', os.path.dirname(tool_path('ffmpeg.exe'))] if have(TOOLS[1]) else []
     if st.get('proxy'):
         a += ['--proxy', st['proxy']]
     return a
@@ -418,7 +547,7 @@ def finish(job, plan):
     ext = plan['ext']
     tmp, final = src.with_name(src.stem + '.eqtmp.' + ext), src.with_suffix('.' + ext)
     maps = [] if job['kind'] == 'audio' else ['-map', '0:v:0', '-map', '0:a:0?']
-    cmd = [FFMPEG or str(tool('ffmpeg.exe')), '-y', '-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1',
+    cmd = [FFMPEG or tool_path('ffmpeg.exe'), '-y', '-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1',
            '-i', str(src)] + maps + plan['v'] + plan['a'] + (['-af', plan['af']] if plan['af'] else []) + \
         (['-movflags', '+faststart'] if ext in ('mp4', 'mov') else []) + [str(tmp)]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -794,17 +923,22 @@ def clean_url(text):
 class Api:
     def boot(self):
         st = load()
+        try:
+            (UPD / 'starting').unlink()      # окно открылось: обновление годное
+        except OSError:
+            pass
         return {'version': VERSION, 'bands': list(EQ_BANDS), 'eq_max': EQ_MAX,
                 'pt': {'max': PT_MAX, 'gain': PT_GAIN, 'f': PT_F, 'q': PT_Q, 'soft': PT_SOFT, 'fs': FS,
                        'flat': CUT_FLAT, 'cutq': CUT_Q, 'steps': CUT_STEPS},
-                'settings': {k: st[k] for k in ('kind', 'quality', 'vcodec', 'aformat', 'theme', 'lang', 'tray', 'clip', 'proxy', 'cookies',
+                'settings': {k: st[k] for k in ('kind', 'quality', 'vcodec', 'aformat', 'theme', 'lang', 'layout', 'tray', 'clip', 'proxy', 'cookies',
                                                 'eq', 'eq_mode', 'eq_points')},
                 'dir': str(out_dir(st)), **self.poll()}
 
     def poll(self):
         with LOCK:
             jobs = [public(j) for j in JOBS]
-        return {'jobs': jobs, 'tools': tools_view(), 'history': load()['history']}
+            update = dict(UPDATE)
+        return {'jobs': jobs, 'tools': tools_view(), 'history': load()['history'], 'update': update}
 
     def put(self, key, value):
         st = load()
@@ -812,6 +946,11 @@ class Api:
                 or key == 'cookies' and value in BROWSERS or key == 'vcodec' and value in VCODECS \
                 or key == 'aformat' and value in ACODECS or key == 'lang' and value in ('ru', 'en'):
             st[key] = value
+        elif key == 'layout' and value in SIZES:
+            st.update(layout=value, size=list(SIZES[value]))
+            if WIN:
+                import webview
+                webview.windows[0].resize(*SIZES[value])
         elif key == 'theme' and value in THEMES:
             st[key] = value
             if WIN:
@@ -929,6 +1068,16 @@ class Api:
             if any(j['status'] == 'run' for j in JOBS):
                 return {'error': 'Дождись конца загрузки'}
         threading.Thread(target=prepare, args=(True,), daemon=True).start()
+        return {'ok': True}
+
+    def update_check(self, apply=False):
+        with LOCK:
+            if UPDATE['state'] in ('check', 'load'):
+                return {'ok': True}
+            if apply and any(j['status'] in ('run', 'wait') for j in JOBS):
+                return {'error': 'Дождись конца загрузки'}
+            UPDATE.update(state='load' if apply else 'check', error='')
+        threading.Thread(target=update_run, args=(bool(apply),), daemon=True).start()
         return {'ok': True}
 
     def info_start(self, text):
@@ -1150,9 +1299,24 @@ def gui():
         if h:
             raise_window(h)
         return
-    w = webview.create_window(TITLE, str(ASSETS / 'ui.html'), js_api=Api(), width=1040, height=720,
-                              min_size=(860, 600), background_color=THEMES[load()['theme']][0])
-    tray = {'icon': None, 'quit': False}
+    st = load()
+    size = st['size'] or SIZES[st['layout']]      # окно открывается таким, каким его оставили
+    w = webview.create_window(TITLE, str(ASSETS / 'ui.html'), js_api=Api(), width=size[0], height=size[1],
+                              min_size=(440, 520), background_color=THEMES[st['theme']][0])
+    tray = {'icon': None, 'quit': False, 'size': None}
+
+    def resized(*a):                        # окно потянули мышью: запомнить размер (сохранит tray_title, не на каждый пиксель)
+        nums = [x for x in a if isinstance(x, (int, float))][-2:]
+        if len(nums) == 2 and nums[0] >= 440 and nums[1] >= 400:
+            tray['size'] = [int(nums[0]), int(nums[1])]
+
+    def keep_size():
+        if tray['size']:
+            st2 = load()
+            if st2['size'] != tray['size']:
+                st2.update(size=tray['size'], layout='tall' if tray['size'][0] <= 700 else 'wide')
+                save(st2)
+            tray['size'] = None
 
     def show(*_):
         w.show()
@@ -1196,6 +1360,7 @@ def gui():
     def tray_title():                       # подсказка у значка показывает, что сейчас качается
         while True:
             time.sleep(2)
+            keep_size()
             icon = tray['icon']
             if not icon:
                 continue
@@ -1213,11 +1378,18 @@ def gui():
         titlebar(load()['theme'])
 
     w.events.closing += closing
+    RESTART['quit'] = leave
+    try:
+        w.events.resized += resized
+    except Exception:
+        pass
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=prepare, daemon=True).start()
     threading.Thread(target=tray_run, daemon=True).start()
     threading.Thread(target=tray_title, daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(6), Api().update_check()), daemon=True).start()   # тихо узнать, есть ли новая версия
     webview.start(started)
+    keep_size()
     tray['quit'] = True
     if tray['icon']:
         try:
@@ -1231,14 +1403,29 @@ def gui():
                 kill(j['proc'])
     preview_kill()
     info_kill()
+    if RESTART['on']:
+        subprocess.Popen(['explorer.exe', sys.executable])
+
+
+def selftest():
+    """Проверка собранного exe (её запускает сборка на GitHub): всё ли нужное внутри."""
+    import webview, pystray
+    from PIL import Image
+    Image.open(ASSETS / 'icon.ico').load()
+    assert '</html>' in (ASSETS / 'ui.html').read_text(encoding='utf-8')[-200:]
+    Path(sys.argv[sys.argv.index('--selftest') + 1]).write_text(VERSION)
 
 
 def main():
+    if '--selftest' in sys.argv:
+        return selftest()
     if WIN and FROZEN:
         if '--uninstall' in sys.argv:
             return uninstall()
         if not same_path(sys.executable, APP_EXE) and install() is not None:
             return                          # установили и запустили установленную копию — или человек отказался
+    if not UPDATED and run_update():
+        return
     gui()
 
 
