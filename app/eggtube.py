@@ -12,11 +12,12 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '3.4.0'
+VERSION = '3.4.1'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
@@ -259,9 +260,9 @@ def tools_view():
     return v
 
 
-def curl(url, part, proxy=''):
+def curl(url, part, proxy='', agent=''):
     r = subprocess.run(['curl.exe', '-L', '--fail', '--silent', '--show-error', '--retry', '2', '--connect-timeout', '20']
-                       + (['-x', proxy] if proxy else []) + ['-o', str(part), url],
+                       + (['-x', proxy] if proxy else []) + (['-A', agent, '--compressed'] if agent else []) + ['-o', str(part), url],
                        capture_output=True, stdin=subprocess.DEVNULL, creationflags=NOWIN)
     if r.returncode:
         raise OSError('curl: ' + (r.stderr.decode('utf-8', 'replace').strip()[-200:] or f'код {r.returncode}'))
@@ -276,7 +277,7 @@ def fetch(url, dest, label, agent=''):
         TOOL.update(step=label, done=0, total=0)
     if WIN and proxy:
         try:
-            curl(url, part, proxy)
+            curl(url, part, proxy, agent)
             return os.replace(part, dest)
         except OSError:
             pass                              # прокси не помог: пробуем напрямую
@@ -299,7 +300,7 @@ def fetch(url, dest, label, agent=''):
         if not WIN:
             raise
         try:
-            curl(url, part)
+            curl(url, part, '', agent)
         except OSError as second:
             raise OSError(f'{type(first).__name__}: {first}; {second}')
     os.replace(part, dest)
@@ -342,6 +343,7 @@ def install_tool(t):
 # Spotify отдаёт музыку только с защитой (DRM), сам звук оттуда взять нельзя. Поэтому со страницы трека берём
 # исполнителя и название, а запись ищем на YouTube и качаем оттуда.
 SPOT = {}
+SPOT_PIC = r'https://(?:i\.scdn\.co|[\w.-]+\.spotifycdn\.com)/image/\w+'      # обложки лежат на разных адресах
 BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
 SPOT_ONLY = 'Со Spotify качаются только отдельные треки: вставь ссылку на трек, а не на альбом или плейлист.'
 SPOT_FAIL = 'Не получилось узнать название трека на Spotify. Проверь интернет или укажи прокси в настройках.'
@@ -355,11 +357,22 @@ def is_spotify(url):
     return bool(re.match(r'https?://([\w-]+\.)*spotify\.(com|link)/', url or '', re.I))
 
 
-def web_text(url):
+def web_text(url, way=''):
+    """Текст страницы. way='curl' — сразу через curl из Windows: у него другое соединение, чем у Python,
+    и там, где одному сайт отдаёт заглушку или рвёт связь, второй проходит."""
     HOME.mkdir(parents=True, exist_ok=True)
     tmp = HOME / f'page{threading.get_ident()}.tmp'
     try:
-        fetch(url, tmp, '', BROWSER)
+        if way == 'curl':
+            proxy = load().get('proxy') or ''
+            try:
+                curl(url, tmp, proxy, BROWSER)
+            except OSError:
+                if not proxy:
+                    raise
+                curl(url, tmp, '', BROWSER)
+        else:
+            fetch(url, tmp, '', BROWSER)
         return tmp.read_text('utf-8', 'replace')
     finally:
         for f in (tmp, tmp.with_name(tmp.name + '.part')):
@@ -390,7 +403,7 @@ def spotify_cover(data, text):
     def walk(node):
         if isinstance(node, dict):
             u = node.get('url')
-            if isinstance(u, str) and u.startswith('https://i.scdn.co/image/'):
+            if isinstance(u, str) and re.match(SPOT_PIC, u):
                 size = max([x for x in (node.get('maxHeight'), node.get('height'), node.get('maxWidth'), node.get('width')) if isinstance(x, (int, float))] or [1])
                 if size > best[0]:
                     best[:] = [size, u]
@@ -399,7 +412,7 @@ def spotify_cover(data, text):
             for x in node:
                 walk(x)
     walk(data)
-    pic = re.search(r'https://i\.scdn\.co/image/\w+', text)
+    pic = re.search(SPOT_PIC, text)
     return best[1] or (pic.group(0) if pic else '')
 
 
@@ -447,25 +460,43 @@ def spotify_meta(url):
     if not m:
         raise Plain(SPOT_ONLY)
     got = {'artist': '', 'title': '', 'thumb': '', 'dur': None}
-    try:                                    # страница встраиваемого плеера: в ней лежат данные трека
-        page = web_text(f'https://open.spotify.com/embed/track/{m.group(1)}')
-        data = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page, re.S)
-        ent = spotify_entity(json.loads(data.group(1))) if data else None
-        if ent:
-            got.update(title=ent['name'].strip(), artist=', '.join(a['name'] for a in ent['artists'][:3]).strip(),
-                       thumb=spotify_cover(json.loads(data.group(1)), data.group(1)),
-                       dur=ent['duration'] / 1000 if isinstance(ent.get('duration'), (int, float)) else None)
-    except Exception:
-        pass
-    if not (got['title'] and got['artist']):
-        try:                                # обычная страница трека: название и исполнитель в её заголовках
-            page = web_text(f'https://open.spotify.com/track/{m.group(1)}')
-            meta = lambda prop: html.unescape((re.search(r'<meta property="%s" content="([^"]*)"' % prop, page) or [0, ''])[1]).strip()
+    tid, seen = m.group(1), []
+    for way in (('curl', '') if WIN else ('',)):
+        if got['title'] and got['artist']:
+            break
+        try:                                # страница встраиваемого плеера: в ней лежат данные трека
+            page = web_text(f'https://open.spotify.com/embed/track/{tid}', way)
+            data = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page, re.S)
+            ent = spotify_entity(json.loads(data.group(1))) if data else None
+            if ent:
+                got.update(title=ent['name'].strip(), artist=', '.join(a['name'] for a in ent['artists'][:3]).strip(),
+                           thumb=spotify_cover(json.loads(data.group(1)), data.group(1)),
+                           dur=ent['duration'] / 1000 if isinstance(ent.get('duration'), (int, float)) else None)
+                break
+            seen.append(f'embed/{way or "python"}: ' + ' '.join(re.findall(r'<title>(.*?)</title>', page, re.S))[:80])
+        except Exception as e:
+            seen.append(f'embed/{way or "python"}: {e}'[:160])
+        try:                                # обычная страница трека: название и исполнитель в её заголовке
+            page = web_text(f'https://open.spotify.com/track/{tid}', way)
             head = re.search(r'<title>(.*?) - song and lyrics by (.*?) \| Spotify</title>', page, re.S)
-            got['title'] = got['title'] or meta('og:title') or (html.unescape(head.group(1)).strip() if head else '')
-            got['artist'] = got['artist'] or (html.unescape(head.group(2)).strip() if head else meta('og:description').split(' · ')[0])
-            got['thumb'] = got['thumb'] or meta('og:image')
-        except Exception:
+            if head:                        # только настоящая страница трека, а не заглушка «Spotify — Web Player»
+                pic = re.search(r'<meta property="og:image" content="([^"]*)"', page)
+                got.update(title=html.unescape(head.group(1)).strip(), artist=html.unescape(head.group(2)).strip(),
+                           thumb=html.unescape(pic.group(1)) if pic else '')
+                break
+            seen.append(f'track/{way or "python"}: ' + ' '.join(re.findall(r'<title>(.*?)</title>', page, re.S))[:80])
+        except Exception as e:
+            seen.append(f'track/{way or "python"}: {e}'[:160])
+        try:                                # на худой конец хотя бы название и обложка
+            card = json.loads(web_text('https://open.spotify.com/oembed?url=' + urllib.parse.quote(f'https://open.spotify.com/track/{tid}', safe=''), way))
+            if isinstance(card.get('title'), str) and card['title'].strip():
+                got.update(title=card['title'].strip(), thumb=card.get('thumbnail_url') or '')
+        except Exception as e:
+            seen.append(f'oembed/{way or "python"}: {e}'[:160])
+    if not got['title']:
+        try:
+            (HOME / 'spotify.log').write_text('\n'.join([url, *seen]), 'utf-8')
+        except OSError:
             pass
     if not got['title']:
         raise Plain(SPOT_FAIL)
@@ -1001,7 +1032,7 @@ def info_run(url, n):
         with LOCK:
             if INFO['n'] == n:
                 if meta:
-                    INFO.update(status='ready', title=spotify_name(meta), thumb=meta['thumb'], author='Spotify', dur=meta['dur'], error='')
+                    INFO.update(status='ready', title=meta['title'], thumb=meta['thumb'], author=meta['artist'], dur=meta['dur'], error='')
                 else:
                     INFO.update(status='error', error=fail)
         return
@@ -1172,7 +1203,7 @@ class Api:
             if any(j['url'] == url and j['kind'] == kind and j['status'] in ('wait', 'run') for j in JOBS):
                 return {'error': 'Это видео уже в очереди'}
             SEQ[0] += 1
-            known = INFO['title'] if INFO['url'] == url and INFO['status'] == 'ready' else ''   # название уже видно в карточке
+            known = INFO['title'] if INFO['url'] == url and INFO['status'] == 'ready' and not spot else ''   # название уже видно в карточке
             JOBS.insert(0, {'id': SEQ[0], 'url': url, 'kind': kind, 'src': 'spotify' if spot else '', 'quality': quality, 'title': known,
                             'af': eq_chain(st), 'vcodec': st['vcodec'], 'aformat': st['aformat'],
                             'status': 'wait', 'stage': '', 'pct': 0, 'speed': None, 'eta': None, 'size': None,
