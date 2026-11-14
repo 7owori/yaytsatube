@@ -16,8 +16,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '4.5.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
-SHOWN = '1.6'
+VERSION = '4.6.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
+SHOWN = '3.1'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
