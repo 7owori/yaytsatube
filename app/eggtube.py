@@ -2,7 +2,6 @@
 import base64
 import ctypes
 import glob
-import html
 import io
 import json
 import math
@@ -13,13 +12,12 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '4.0.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
-SHOWN = '1.1'
+VERSION = '4.1.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
+SHOWN = '1.2'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
@@ -341,270 +339,11 @@ def install_tool(t):
         raise OSError('в архиве нет нужных файлов')
 
 
-# ---------- Spotify ----------
-# Spotify отдаёт музыку только с защитой (DRM), сам звук оттуда взять нельзя. Поэтому со страницы трека берём
-# исполнителя и название, а запись ищем на YouTube и качаем оттуда.
-SPOT = {}
-PICK = {}
-GUI = {'on': False}
-BROWSE = threading.Lock()
-SPOT_PIC = r'https://(?:i\.scdn\.co|[\w.-]+\.spotifycdn\.com)/image/\w+'      # обложки лежат на разных адресах
-BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
-SPOT_ONLY = 'Со Spotify качаются только отдельные треки: вставь ссылку на трек, а не на альбом или плейлист.'
-SPOT_FAIL = 'Не получилось узнать, что это за трек: Spotify не отдаёт данные по твоему адресу. Включи VPN на весь компьютер или укажи прокси в настройках.'
-
-
-class Plain(Exception):
-    """Ошибка, текст которой показываем человеку как есть."""
+NO_SPOTIFY = 'Spotify не поддерживается: музыка там защищена. Вставь ссылку на этот трек с YouTube или YouTube Music.'
 
 
 def is_spotify(url):
     return bool(re.match(r'https?://([\w-]+\.)*spotify\.(com|link)/', url or '', re.I))
-
-
-def web_text(url, way=''):
-    """Текст страницы. way='curl' — сразу через curl из Windows: у него другое соединение, чем у Python,
-    и там, где одному сайт отдаёт заглушку или рвёт связь, второй проходит."""
-    HOME.mkdir(parents=True, exist_ok=True)
-    tmp = HOME / f'page{threading.get_ident()}.tmp'
-    try:
-        if way == 'curl':
-            proxy = load().get('proxy') or ''
-            try:
-                curl(url, tmp, proxy, BROWSER)
-            except OSError:
-                if not proxy:
-                    raise
-                curl(url, tmp, '', BROWSER)
-        else:
-            fetch(url, tmp, '', BROWSER)
-        return tmp.read_text('utf-8', 'replace')
-    finally:
-        for f in (tmp, tmp.with_name(tmp.name + '.part')):
-            try:
-                f.unlink()
-            except OSError:
-                pass
-
-
-def browser_text(url, script, wait=15):
-    """Открывает адрес в невидимом окне программы и возвращает то, что вернул script. Окно — настоящий браузер,
-    поэтому сайт отдаёт ему ту же страницу, что и человеку (простому запросу Spotify отдаёт заглушку)."""
-    import webview
-    with BROWSE:
-        loaded = threading.Event()
-        w = webview.create_window('spotify', url, hidden=True, width=480, height=320)
-        try:
-            w.events.loaded += lambda *a: loaded.set()
-            loaded.wait(wait)
-            for _ in range(16):
-                got = w.evaluate_js(script)
-                if got:
-                    return str(got)
-                time.sleep(.4)
-            return ''
-        finally:
-            try:
-                w.destroy()
-            except Exception:
-                pass
-
-
-def spotify_entity(node):
-    """В данных страницы ищет запись трека: у неё есть название и список исполнителей."""
-    if isinstance(node, dict):
-        names = [a.get('name') for a in node.get('artists') or [] if isinstance(a, dict)] if isinstance(node.get('artists'), list) else []
-        if isinstance(node.get('name'), str) and names and all(isinstance(n, str) for n in names):
-            return node
-        node = list(node.values())
-    if isinstance(node, list):
-        for x in node:
-            found = spotify_entity(x)
-            if found:
-                return found
-    return None
-
-
-def spotify_cover(data, text):
-    """Самая большая обложка из данных страницы (их там несколько размеров)."""
-    best = [0, '']
-    def walk(node):
-        if isinstance(node, dict):
-            u = node.get('url')
-            if isinstance(u, str) and re.match(SPOT_PIC, u):
-                size = max([x for x in (node.get('maxHeight'), node.get('height'), node.get('maxWidth'), node.get('width')) if isinstance(x, (int, float))] or [1])
-                if size > best[0]:
-                    best[:] = [size, u]
-            node = list(node.values())
-        if isinstance(node, list):
-            for x in node:
-                walk(x)
-    walk(data)
-    pic = re.search(SPOT_PIC, text)
-    return best[1] or (pic.group(0) if pic else '')
-
-
-def tag_file(path, meta):
-    """Вписывает в скачанный файл исполнителя, название и обложку. Не вышло — файл остаётся как был."""
-    src = Path(path)
-    ext = src.suffix.lower().lstrip('.')
-    tmp, cover = src.with_name(src.stem + '.tagtmp.' + ext), HOME / f'cover{threading.get_ident()}.jpg'
-    try:
-        art = ext in ('mp3', 'm4a', 'flac') and bool(meta.get('thumb'))     # в Opus и WAV картинку ffmpeg не кладёт
-        if art:
-            try:
-                fetch(meta['thumb'], cover, '', BROWSER)
-            except Exception:
-                art = False
-        cmd = [FFMPEG or tool_path('ffmpeg.exe'), '-y', '-hide_banner', '-loglevel', 'error', '-i', str(src)]
-        if art:
-            cmd += ['-i', str(cover), '-map', '0:a', '-map', '1:v', '-c', 'copy', '-disposition:v:0', 'attached_pic',
-                    '-metadata:s:v', 'title=Album cover', '-metadata:s:v', 'comment=Cover (front)']
-        else:
-            cmd += ['-map', '0:a', '-c', 'copy']
-        cmd += ['-metadata', 'title=' + meta['title'], '-metadata', 'artist=' + meta['artist']]
-        cmd += (['-id3v2_version', '3'] if ext == 'mp3' else []) + [str(tmp)]
-        r = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, creationflags=NOWIN, timeout=180)
-        if r.returncode == 0 and tmp.is_file() and tmp.stat().st_size > src.stat().st_size * .5:
-            os.replace(tmp, src)
-            return True
-    except Exception:
-        pass
-    finally:
-        for f in (tmp, cover, cover.with_name(cover.name + '.part')):
-            try:
-                f.unlink()
-            except OSError:
-                pass
-    return False
-
-
-def spotify_meta(url):
-    """{'artist', 'title', 'thumb', 'dur'} трека по ссылке Spotify."""
-    with LOCK:
-        if url in SPOT:
-            return SPOT[url]
-    m = re.search(r'spotify\.com/(?:intl-[\w-]+/)?track/(\w+)', url)
-    if not m:
-        raise Plain(SPOT_ONLY)
-    got = {'artist': '', 'title': '', 'thumb': '', 'dur': None}
-    tid, seen = m.group(1), []
-
-    def embed(text, how):
-        ent = spotify_entity(json.loads(text)) if text else None
-        if not ent:
-            seen.append(f'embed/{how}: данных трека нет ({len(text or "")} симв.)')
-            return False
-        got.update(title=ent['name'].strip(), artist=', '.join(a['name'] for a in ent['artists'][:3]).strip(),
-                   thumb=spotify_cover(json.loads(text), text),
-                   dur=ent['duration'] / 1000 if isinstance(ent.get('duration'), (int, float)) else None)
-        return bool(got['title'] and got['artist'])
-
-    if GUI['on']:                           # надёжнее всего: открыть страницу трека в невидимом окне-браузере
-        try:
-            embed(browser_text(f'https://open.spotify.com/embed/track/{tid}',
-                               "(function(){var e=document.getElementById('__NEXT_DATA__');return e?e.textContent:''})()"), 'окно')
-        except Exception as e:
-            seen.append(f'embed/окно: {e}'[:160])
-    for way in (('curl', '') if WIN else ('',)):
-        if got['title'] and got['artist']:
-            break
-        try:                                # то же простым запросом
-            page = web_text(f'https://open.spotify.com/embed/track/{tid}', way)
-            data = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page, re.S)
-            if embed(data.group(1) if data else '', way or 'python'):
-                break
-        except Exception as e:
-            seen.append(f'embed/{way or "python"}: {e}'[:160])
-        try:                                # обычная страница трека: название и исполнитель в её заголовке
-            page = web_text(f'https://open.spotify.com/track/{tid}', way)
-            head = re.search(r'<title>(.*?) - song and lyrics by (.*?) \| Spotify</title>', page, re.S)
-            if head:                        # только настоящая страница трека, а не заглушка «Spotify — Web Player»
-                pic = re.search(r'<meta property="og:image" content="([^"]*)"', page)
-                got.update(title=html.unescape(head.group(1)).strip(), artist=html.unescape(head.group(2)).strip(),
-                           thumb=html.unescape(pic.group(1)) if pic else '')
-                break
-            seen.append(f'track/{way or "python"}: ' + ' '.join(re.findall(r'<title>(.*?)</title>', page, re.S))[:80])
-        except Exception as e:
-            seen.append(f'track/{way or "python"}: {e}'[:160])
-    for way in (('curl', '') if WIN else ('',)):
-        if got['title'] and got['artist']:
-            break
-        try:                                # Spotify в России не работает и отдаёт пустую страницу; о треке знает и song.link
-            page = web_text(f'https://song.link/s/{tid}', way)
-            data = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page, re.S)
-            ent = (json.loads(data.group(1)).get('props', {}).get('pageProps', {}).get('pageData') or {}).get('entityData') if data else None
-            if isinstance(ent, dict) and isinstance(ent.get('title'), str) and isinstance(ent.get('artistName'), str):
-                got.update(title=ent['title'].strip(), artist=ent['artistName'].strip(),
-                           thumb=ent['thumbnailUrl'] if str(ent.get('thumbnailUrl') or '').startswith('https://') else '',
-                           dur=ent['duration'] / 1000 if isinstance(ent.get('duration'), (int, float)) else None)
-            else:
-                seen.append(f'song.link/{way or "python"}: данных трека нет ({len(page)} симв.)')
-        except Exception as e:
-            seen.append(f'song.link/{way or "python"}: {e}'[:160])
-    if not (got['title'] and got['artist']):   # без исполнителя по одному названию находится чужая песня: лучше честно отказать
-        try:
-            (HOME / 'spotify.log').write_text('\n'.join([url, *seen]), 'utf-8')
-        except OSError:
-            pass
-        raise Plain(SPOT_FAIL)
-    with LOCK:
-        SPOT[url] = got
-    return got
-
-
-def spotify_name(meta):
-    return ' — '.join(x for x in (meta['artist'], meta['title']) if x)
-
-
-SPOT_OFF = ('live', 'cover', 'remix', 'karaoke', 'slowed', 'sped up', 'nightcore', 'instrumental', 'reaction', '8d', 'концерт', 'кавер')
-
-
-def spotify_pick(meta):
-    """Ищет трек на YouTube и выбирает из первых результатов подходящий: та же длина, тот же исполнитель,
-    не концерт и не кавер. Первый попавшийся результат часто оказывается не той записью."""
-    query = ' - '.join(x for x in (meta['artist'], meta['title']) if x)
-    env = dict(os.environ, PATH=str(BIN) + os.pathsep + os.environ.get('PATH', ''), PYTHONIOENCODING='utf-8')
-    try:
-        r = subprocess.run(ytdlp_cmd() + ['--ignore-config', '--no-colors', '--encoding', 'utf-8', '--flat-playlist', '--socket-timeout', '20',
-                                          '--retries', '3', '--print', 'JT_HIT:%(id)s|%(duration)s|%(channel)s|%(title)s'] + net_args(load())
-                           + ['--', 'ytsearch8:' + query], capture_output=True, stdin=subprocess.DEVNULL, env=env, creationflags=NOWIN,
-                           timeout=90, encoding='utf-8', errors='replace')
-        lines = r.stdout.splitlines()
-    except Exception:
-        lines = []
-    best, low_q, first = (None, -99), query.lower(), meta['artist'].split(',')[0].strip().lower()
-    for i, line in enumerate(x for x in lines if x.startswith('JT_HIT:')):
-        m = re.match(r'JT_HIT:([\w-]{6,})\|([^|]*)\|([^|]*)\|(.*)', line)
-        if not m:
-            continue
-        vid, dur, chan, title = m.group(1), num(m.group(2)), m.group(3).strip(), m.group(4).strip()
-        text = (title + ' ' + chan).lower()
-        score = -i
-        if meta.get('dur') and dur:
-            diff = abs(dur - meta['dur'])
-            score += 8 if diff <= 2 else 4 if diff <= 6 else 0 if diff <= 20 else -8
-        score += 4 if chan.endswith(' - Topic') else 0             # так YouTube называет каналы с официальными записями
-        score += 3 if first and first in text else -3
-        score += 3 if meta['title'].lower() in title.lower() else -3
-        score -= sum(5 for bad in SPOT_OFF if re.search(r'(?<!\w)' + re.escape(bad) + r'(?!\w)', text) and bad not in low_q)
-        if score > best[1]:
-            best = (vid, score)
-    return 'https://www.youtube.com/watch?v=' + best[0] if best[0] else 'ytsearch1:' + query
-
-
-def source(url):
-    """Что отдать yt-dlp: саму ссылку или, для Spotify, найденную на YouTube запись этого трека."""
-    if not is_spotify(url):
-        return url
-    meta = spotify_meta(url)
-    with LOCK:
-        if url in PICK:
-            return PICK[url]
-    pick = spotify_pick(meta)
-    with LOCK:
-        PICK[url] = pick
-    return pick
 
 
 # ---------- обновление самой программы ----------
@@ -786,8 +525,9 @@ def ytdlp_cmd():
 # ---------- загрузка ----------
 # Способы соединения с YouTube. Обычный у части провайдеров рвётся (SSL: record layer failure): фильтр провайдера
 # узнаёт программу по «почерку» соединения. Тогда yt-dlp представляется браузером Chrome, а если и так не вышло —
-# файл качает curl из Windows, у которого соединение устроено иначе. Сработавший способ запоминается.
-NET_MODES = {'': [], 'chrome': ['--impersonate', 'chrome'], 'curl': ['--downloader', 'curl']}
+# файл качает curl из Windows, у которого соединение устроено иначе. Ещё раньше пробуем старый адрес IPv4: по IPv6
+# у некоторых провайдеров YouTube рвётся чаще. Сработавший способ запоминается.
+NET_MODES = {'': [], 'ipv4': ['--force-ipv4'], 'chrome': ['--force-ipv4', '--impersonate', 'chrome'], 'curl': ['--force-ipv4', '--downloader', 'curl']}
 
 
 def net_args(st):
@@ -795,6 +535,30 @@ def net_args(st):
     if st.get('proxy'):
         a += ['--proxy', st['proxy']]
     return a + NET_MODES.get(st.get('net_mode') or '', [])
+
+
+def clip_parse(clip):
+    """[от, до] в секундах (любой край может быть None) -> (от, до) или текст ошибки; None — качать целиком."""
+    if not clip:
+        return None
+    try:
+        a, b = (None if x in (None, '') else float(x) for x in clip)
+    except (TypeError, ValueError):
+        return 'Не понял время отрывка'
+    a = a or 0.0
+    if not a and b is None:
+        return None                         # оба края пустые: качать целиком
+    if a < 0 or (b is not None and b <= a):
+        return 'Конец отрывка должен быть позже начала'
+    return (round(a, 2), None if b is None else round(b, 2))
+
+
+def clip_name(clip):
+    """Добавка к имени файла, чтобы отрывок не затёр целое видео: « 0.30-1.15»."""
+    if not clip:
+        return ''
+    mark = lambda t: 'end' if t is None else '%d.%02d' % divmod(int(t), 60)
+    return ' ' + mark(clip[0]) + '-' + mark(clip[1])
 
 
 def build_args(job, st, simple=False):
@@ -806,7 +570,7 @@ def build_args(job, st, simple=False):
         '--no-quiet', '--verbose',           # --print включает тихий режим, а в нём не видно ни повторов, ни причин задержки
         '--socket-timeout', '15', '--retries', '4', '--fragment-retries', '4', '--retry-sleep', '1',
         '--concurrent-fragments', '4',       # если дорожка всё же кусочная, качать по четыре куска разом
-        '--paths', str(out_dir(st)), '--output', (job.get('_name') or '%(title).120B') + ' [%(id)s]' + (' EQ' if eq else '') + '.%(ext)s',
+        '--paths', str(out_dir(st)), '--output', '%(title).120B [%(id)s]' + clip_name(job.get('clip')) + (' EQ' if eq else '') + '.%(ext)s',
         '--print', 'before_dl:JT_ID:%(id)s',
         '--print', 'before_dl:JT_TITLE:%(title)j',
         '--print', 'after_move:JT_FILE:%(filepath)j',
@@ -833,7 +597,10 @@ def build_args(job, st, simple=False):
         a += ['--format', 'bv*+ba/b', '--format-sort', ','.join(sort)]
         # под перекодирование качаем в MKV (туда ложится что угодно), в нужный формат файл переложит finish
         a += ['--merge-output-format', 'mkv'] if recode else ['--merge-output-format', box, '--remux-video', box]
-    return a + ['--', job.get('_query') or job['url']]
+    if job.get('clip'):                     # отрывок: yt-dlp качает только этот кусок; у видео края режутся точно по времени
+        a += ['--download-sections', '*%s-%s' % (job['clip'][0], job['clip'][1] if job['clip'][1] is not None else 'inf')]
+        a += ['--force-keyframes-at-cuts'] if job['kind'] == 'video' else []
+    return a + ['--', job['url']]
 
 
 def post_plan(job):
@@ -990,8 +757,7 @@ def run_once(job, st, simple):
         elif line.startswith('JT_TITLE:'):
             try:
                 with LOCK:
-                    if job.get('src') != 'spotify':          # у трека со Spotify название уже верное, не брать его с YouTube
-                        job['title'] = json.loads(line[9:])
+                    job['title'] = json.loads(line[9:])
             except ValueError:
                 pass
         elif line.startswith('JT_INFO:'):
@@ -1025,15 +791,11 @@ def run_job(job):
     st = load()
     try:
         out_dir(st).mkdir(parents=True, exist_ok=True)
-        if job.get('src') == 'spotify' and not job.get('_query'):
-            job['stage'] = 'Ищу трек'
-            meta = spotify_meta(job['url'])
-            name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', ' ', spotify_name(meta).replace(' — ', ' - ')).strip()[:120]
-            job.update(title=spotify_name(meta), _query=source(job['url']), _name=name.replace('%', '%%'))
         modes = sorted(NET_MODES, key=lambda m: m != st['net_mode'])      # начать с того способа, что сработал в прошлый раз
         for attempt in range(1, ATTEMPTS + 1):
             st = dict(st, net_mode=modes[attempt - 1])
             code, err, tail = run_once(job, st, False)
+            job['_log'] = job.get('_log', []) + [f'=== попытка {attempt}, способ: {st["net_mode"] or "обычный"} ===', *tail]
             if not code and job['status'] != 'cancel' and load()['net_mode'] != st['net_mode']:
                 keep = load()
                 keep['net_mode'] = st['net_mode']
@@ -1057,12 +819,6 @@ def run_job(job):
             if plan:
                 job.update(pct=0 if plan['v'][:2] != ['-c:v', 'copy'] and plan['v'] != ['-vn'] else 100, stage=plan['stage'], post=True)
                 code, err, tail = finish(job, plan)
-        if code == 0 and job['status'] != 'cancel' and job.get('src') == 'spotify' and job.get('file') and os.path.isfile(job['file']) and have(TOOLS[1]):
-            job.update(stage='Подписываю файл')
-            tag_file(job['file'], spotify_meta(job['url']))
-    except Plain as e:
-        code, err, tail = 1, str(e), []
-        job['_say'] = str(e)
     except OSError as e:
         code, err, tail = 1, str(e), []
     with LOCK:
@@ -1083,7 +839,11 @@ def run_job(job):
         else:
             plain = [x for x in tail if x.strip() and not x.startswith(('[debug]', 'Traceback', '  File ', '    '))]
             raw = err or (plain[-1] if plain else f'yt-dlp завершился с кодом {code}')
-            job.update(status='error', stage='', error=job.pop('_say', None) or explain(raw), raw=raw[:400])
+            job.update(status='error', stage='', error=explain(raw), raw=raw[:400])
+            try:                            # журнал неудачи сохраняется сам: по нему видно, какие способы пробовались
+                LOG.write_text('\n'.join([job['url'], *job.get('_log', tail)]), 'utf-8')
+            except OSError:
+                pass
             try:
                 LOG.write_text('\n'.join([job['url'], *tail]), 'utf-8')
             except OSError:
@@ -1099,13 +859,6 @@ def preview_run(url, n):
     """Качает полминуты звука в mp3. Эквалайзер на него накладывает уже окно, поэтому отрывок нужен один на ссылку."""
     st, err, title = load(), '', ''
     env = dict(os.environ, PATH=str(BIN) + os.pathsep + os.environ.get('PATH', ''), PYTHONIOENCODING='utf-8')
-    try:
-        url = source(url)
-    except Exception as e:
-        with LOCK:
-            if PREV['n'] == n:
-                PREV.update(status='error', proc=None, error=str(e) if isinstance(e, Plain) else SPOT_FAIL)
-        return
     try:
         PREV_DIR.mkdir(parents=True, exist_ok=True)
         for cut in PREV_CUTS:
@@ -1171,17 +924,10 @@ def info_run(url, n):
     """Спрашивает у yt-dlp название, обложку, автора и длину, ничего не скачивая."""
     env = dict(os.environ, PATH=str(BIN) + os.pathsep + os.environ.get('PATH', ''), PYTHONIOENCODING='utf-8')
     got, err = {}, ''
-    if is_spotify(url):                     # у Spotify спрашиваем сами: yt-dlp его не читает
-        try:
-            meta, fail = spotify_meta(url), ''
-        except Exception as e:
-            meta, fail = None, str(e) if isinstance(e, Plain) else SPOT_FAIL
+    if is_spotify(url):
         with LOCK:
             if INFO['n'] == n:
-                if meta:
-                    INFO.update(status='ready', title=meta['title'], thumb=meta['thumb'], author=meta['artist'], dur=meta['dur'], error='')
-                else:
-                    INFO.update(status='error', error=fail)
+                INFO.update(status='error', error=NO_SPOTIFY)
         return
     try:
         args = ytdlp_cmd() + ['--ignore-config', '--no-playlist', '--no-colors', '--encoding', 'utf-8', '--skip-download',
@@ -1338,24 +1084,24 @@ class Api:
         save(st)
         return {'ok': True}
 
-    def add(self, text, kind, quality):
+    def add(self, text, kind, quality, clip=None):
         url = clean_url(text)
         if not url:
             return {'error': 'Вставь ссылку на видео'}
         if kind not in ('video', 'audio') or quality not in QUALITIES:
             return {'error': 'Неизвестный формат'}
-        spot = is_spotify(url)
-        if spot:
-            kind = 'audio'                  # со Spotify берётся только звук
-            if '/track/' not in url:
-                return {'error': SPOT_ONLY}
+        if is_spotify(url):
+            return {'error': NO_SPOTIFY}
+        clip = clip_parse(clip)
+        if isinstance(clip, str):
+            return {'error': clip}
         st = load()
         with LOCK:
             if any(j['url'] == url and j['kind'] == kind and j['status'] in ('wait', 'run') for j in JOBS):
                 return {'error': 'Это видео уже в очереди'}
             SEQ[0] += 1
-            known = INFO['title'] if INFO['url'] == url and INFO['status'] == 'ready' and not spot else ''   # название уже видно в карточке
-            JOBS.insert(0, {'id': SEQ[0], 'url': url, 'kind': kind, 'src': 'spotify' if spot else '', 'quality': quality, 'title': known,
+            known = INFO['title'] if INFO['url'] == url and INFO['status'] == 'ready' else ''   # название уже видно в карточке
+            JOBS.insert(0, {'id': SEQ[0], 'url': url, 'kind': kind, 'clip': clip, 'quality': quality, 'title': known,
                             'af': eq_chain(st), 'vcodec': st['vcodec'], 'aformat': st['aformat'],
                             'status': 'wait', 'stage': '', 'pct': 0, 'speed': None, 'eta': None, 'size': None,
                             'file': '', 'error': '', 'raw': ''})
@@ -1499,7 +1245,7 @@ class Api:
     def open_log(self, job_id=None):
         with LOCK:
             job = next((j for j in JOBS if j['id'] == job_id), None)
-            lines = list(job.get('_tail') or []) if job else []
+            lines = (list(job.get('_log') or []) + ['=== сейчас ===', *(job.get('_tail') or [])] if job.get('_log') else list(job.get('_tail') or [])) if job else []
         if lines:                                  # свежий журнал этой строки, даже если она ещё качается
             try:
                 LOG.write_text('\n'.join([job['url'], *lines]), 'utf-8')
@@ -1744,7 +1490,6 @@ def gui():
 
     def started():
         w.events.shown.wait(10)
-        GUI['on'] = WIN
         titlebar(load()['theme'])
 
     w.events.closing += closing
