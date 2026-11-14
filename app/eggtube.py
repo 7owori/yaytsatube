@@ -16,8 +16,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '4.4.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
-SHOWN = '1.5'
+VERSION = '4.5.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
+SHOWN = '1.6'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
@@ -847,11 +847,8 @@ def run_once(job, st, simple):
                 continue
             m = re.search(r'Retrying.*?\((\d+)/(\d+)\)', line)
             with LOCK:
-                if m:                                 # связь рвётся: показать номер попытки и слова yt-dlp
-                    job.update(stage=f'Связь рвётся, попытка {m.group(1)} из {m.group(2)}',
-                               note=re.sub(r'^(WARNING: )?\[[\w:]+\]\s*', '', line)[:220])
-                elif line.startswith('WARNING:'):
-                    job['note'] = re.sub(r'^\[[\w:]+\]\s*', '', line[8:].strip())[:220]
+                if m:                                 # yt-dlp повторяет запрос сам: человеку это не ошибка, а «подключаюсь»
+                    job.update(stage='Подключаюсь к серверу с видео', note='')
                 elif re.match(r'\[(Merger|ExtractAudio|VideoRemuxer|VideoConvertor|FixupM3u8|FixupM4a)\]', line):
                     job['stage'] = 'Собираю файл'
     code = proc.wait()
@@ -876,7 +873,7 @@ def run_job(job):
                 if not code or job['status'] == 'cancel' or attempt == ATTEMPTS or not flaky:
                     break
                 # обрыв или отказ на середине: новый заход берёт свежие ссылки и продолжает с того же места (кусок .part цел)
-                job.update(stage=f'Связь оборвалась, пробую другим способом ({attempt + 1} из {ATTEMPTS})', got=0)
+                job.update(stage='Подключаюсь другим способом', note='', got=0)
                 for _ in range(40):
                     if job['status'] == 'cancel':
                         break
@@ -895,7 +892,7 @@ def run_job(job):
             if job.get('file'):
                 Path(job['file']).unlink(missing_ok=True)
             sweep(out_dir(st), job.get('vid'))
-            job.update(pct=0, got=0, file='', stage='Отрывок не отдали: качаю целиком и вырежу сам', _cut=True)
+            job.update(pct=0, got=0, file='', stage='Качаю целиком, чтобы вырезать отрывок', _cut=True)
             code, err, tail, st = attempts(st)
         if blind():
             code, err = 1, 'в скачанном файле нет видеодорожки'
@@ -1071,7 +1068,7 @@ def worker():
         with LOCK:
             job = next((j for j in reversed(JOBS) if j['status'] == 'wait'), None)   # новые сверху, качаем по порядку
             if job:
-                job.update(status='run', stage='Ищу видео', note='', got=0)
+                job.update(status='run', stage='Собираю данные', note='', got=0)
         if job:
             run_job(job)
             WAKE.set()
