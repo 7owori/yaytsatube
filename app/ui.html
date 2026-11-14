@@ -119,11 +119,21 @@ section{display:flex;flex-direction:column;width:100%;max-width:880px;height:100
   94%{transform:scale(1.05,.96)}
   100%{transform:none}}
 .pageicon.jump svg{animation:jump .85s both}
-/* сальто одним движением: всё яйцо летит по дуге вверх и обратно, а внутри неё делает один ровный оборот */
-@keyframes flipArc{0%{transform:none;animation-timing-function:cubic-bezier(.33,1,.68,1)}50%{transform:translateY(-44px);animation-timing-function:cubic-bezier(.32,0,.67,0)}100%{transform:none}}
-@keyframes flipSpin{to{transform:rotate(360deg)}}
-.pageicon.flip{animation:flipArc .9s both}
-.pageicon.flip svg{transform-origin:50% 50%;animation:flipSpin .9s cubic-bezier(.4,.1,.6,.9) both}
+/* сальто в манере прыжка: тело приседает, вытягивается на взлёте, собирается наверху, вытягивается в падении и
+   плющится о землю — ровно как в прыжке, только выше. А оборот идёт отдельным слоем, одним плавным движением, пока яйцо в воздухе */
+@keyframes flipBody{
+  0%{transform:none;animation-timing-function:cubic-bezier(.3,0,.7,1)}
+  14%{transform:scale(1.22,.76);animation-timing-function:cubic-bezier(.2,.8,.4,1)}
+  34%{transform:translateY(-24px) scale(.84,1.22);animation-timing-function:cubic-bezier(.2,.6,.5,1)}
+  50%{transform:translateY(-42px) scale(1.03,.97);animation-timing-function:cubic-bezier(.5,0,.9,.5)}
+  66%{transform:translateY(-12px) scale(.86,1.2);animation-timing-function:cubic-bezier(.6,0,1,.7)}
+  74%{transform:scale(1.3,.68);animation-timing-function:cubic-bezier(.2,.7,.4,1)}
+  86%{transform:translateY(-3px) scale(.94,1.07);animation-timing-function:ease-in}
+  94%{transform:scale(1.05,.96)}
+  100%{transform:none}}
+@keyframes flipSpin{0%,13%{transform:rotate(0);animation-timing-function:cubic-bezier(.35,0,.5,1)}70%,100%{transform:rotate(360deg)}}
+.pageicon.flip{transform-origin:50% 100%;animation:flipBody 1s both}
+.pageicon.flip svg{transform-origin:50% 50%;animation:flipSpin 1s both}
 h2{font:700 36px/1.2 var(--sans);letter-spacing:-.015em;color:var(--title)}
 .sub{min-height:22px;margin-top:6px;font-size:15px;line-height:1.45;color:var(--muted)}
 .body{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;margin:18px -12px 0;padding:0 12px}
