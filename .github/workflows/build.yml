@@ -38,4 +38,6 @@ jobs:
           } else {
             gh release create $tag dist\Yaytsatube-Setup.exe --target $env:GITHUB_SHA --title "Яйцатюб $env:VER" --latest --notes "Скачай Yaytsatube-Setup.exe и запусти: программа сама предложит установку. Если Яйцатюб уже стоит, скачивать ничего не нужно: Настройки → «Проверить обновления»."
           }
+          # промежуточные версии не копим: остаются первый релиз и текущий
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | ForEach-Object { if ($_ -ne $tag -and $_ -ne 'v3.0.0') { gh release delete $_ --yes --cleanup-tag } }
           exit 0
