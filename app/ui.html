@@ -482,7 +482,7 @@ const EN = {
 /* составные строки (с числами и названиями) переводятся по кускам, длинные куски раньше коротких */
 const EN_PARTS = [
   [/Обновить до /, 'Update to '], [/Обновляю до /, 'Updating to '], [/Обновлено до /, 'Updated to '], [/последняя версия/, 'latest version'],
-  [/Связь рвётся, попытка (\d+) из (\d+)/, 'Connection keeps dropping, try $1 of $2'], [/Связь оборвалась, захожу заново \((\d+) из (\d+)\)/, 'Connection lost, starting over ($1 of $2)'],
+  [/Связь рвётся, попытка (\d+) из (\d+)/, 'Connection keeps dropping, try $1 of $2'], [/Связь оборвалась, захожу заново \((\d+) из (\d+)\)/, 'Connection lost, starting over ($1 of $2)'], [/Связь оборвалась, пробую другим способом \((\d+) из (\d+)\)/, 'Connection lost, trying another way ($1 of $2)'],
   [/Не удалось скачать компоненты \(/, 'Could not fetch components ('], [/\)\. Проверь интернет и нажми «Обновить» в настройках\./, '). Check your connection and press Update in Settings.'],
   [/Первый запуск, докачиваю компоненты: /, 'First run, fetching components: '], [/Докачиваю компоненты: /, 'Fetching components: '], [/Обновляю компоненты: /, 'Updating components: '],
   [/Подключаюсь к серверу с видео/, 'Connecting to the video server'], [/Накладываю эквалайзер/, 'Applying the equalizer'], [/Перекодирую в /, 'Converting to '], [/Перекладываю в /, 'Repacking into '],
@@ -1093,7 +1093,7 @@ function renderJobs(jobs) {
   // большое яйцо наполняется по ходу загрузки (волны ходят, пока идёт работа), в покое целое; на старте подпрыгивает
   $('eggFill').style.transform = 'translateY(' + (run ? 72 - 72 * run.pct / 100 : -10) + 'px)';
   $('bigEgg').classList.toggle('live', !!run);
-  if (run) $('bigEgg').classList.toggle('spot', run.src == 'spotify');      // трек со Spotify: яйцо наполняется зелёным
+  if (run || !live.length) $('bigEgg').classList.toggle('spot', !!run && run.src == 'spotify');      // трек со Spotify: яйцо наполняется зелёным
   if (run && run.id != runId) egg('jump');
   runId = run ? run.id : 0;
   $('tLoad').textContent = run ? (run.stage == 'Качаю' || /^Перекодирую/.test(run.stage) ? run.stage + ' · ' + num(run.pct, 0) + '%' : run.stage || 'Ищу видео')
