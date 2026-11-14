@@ -42,15 +42,18 @@ main{height:100vh}
 .link.busy:disabled{opacity:.85}
 .link.busy::before{content:'';width:11px;height:11px;border-radius:50%;border:1.6px solid currentColor;border-right-color:transparent;animation:turn .7s linear infinite}
 @keyframes turn{to{transform:rotate(360deg)}}
-.clipbox{position:fixed;z-index:20;width:236px;padding:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;border-radius:8px;background:var(--pop);box-shadow:0 0 0 1px rgba(var(--tint),.08),var(--shadow);animation:pop .12s ease-out}
+.clipbox{position:fixed;z-index:20;width:252px;padding:12px;display:grid;grid-template-columns:auto 1fr;align-items:center;gap:8px 10px;border-radius:8px;background:var(--pop);box-shadow:0 0 0 1px rgba(var(--tint),.08),var(--shadow);animation:pop .12s ease-out}
 .clipbox[hidden]{display:none}
-.clipbox label{display:grid;gap:4px;font-size:12px;color:var(--dim)}
-.clipbox input{width:100%;height:32px;padding:0 10px;border-radius:6px;background:var(--hover);box-shadow:var(--edge);font-size:14px;color:var(--ink)}
-.clipbox input:focus{box-shadow:inset 0 0 0 1px var(--accent);outline:0}
-.clipbox small,.clipbox p,.clipbox div{grid-column:1/-1}
+.clipbox>span{font-size:13px;color:var(--dim)}
+.tc{display:flex;align-items:center;gap:4px}
+.tc i{font-style:normal;color:var(--dim)}
+.tc input{width:54px;height:32px;padding:0;text-align:center;border-radius:6px;background:var(--hover);box-shadow:var(--edge);font-size:14px;font-variant-numeric:tabular-nums;color:var(--ink)}
+.tc input::placeholder{font-size:12px;color:var(--dim)}
+.tc input:focus{box-shadow:inset 0 0 0 1px var(--accent);outline:0}
+.clipbox small,.clipbox p,.clipbox>div:last-child{grid-column:1/-1}
 .clipbox small{font-size:12px;line-height:1.35;color:var(--dim)}
 .clipbox p{font-size:12px;color:var(--bad)}
-.clipbox div{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
+.clipbox>div:last-child{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
 .clipbox .act,.clipbox .act.accent{height:30px;padding:0 12px;font-size:13px;border-radius:6px}
 #clipBtn.on{color:var(--ink);box-shadow:inset 0 0 0 1px rgba(255,0,0,.45)}
 #game{position:fixed;inset:0;z-index:60;background:var(--bg);animation:fade .3s ease-out;cursor:pointer;user-select:none}
@@ -421,9 +424,9 @@ body.boot .corner{animation:fade .6s ease-out .55s backwards}
 <div id="toast" hidden></div>
 <div class="menu" id="menu" role="menu" hidden></div>
 <div class="clipbox" id="clipBox" role="dialog" aria-label="Отрывок" hidden>
-  <label>От<input id="clipFrom" type="text" autocomplete="off" spellcheck="false" placeholder="0:00"></label>
-  <label>До<input id="clipTo" type="text" autocomplete="off" spellcheck="false" placeholder="конец"></label>
-  <small>Например 1:30 или 90. Пустое «До» — до конца видео.</small>
+  <span>От</span><div class="tc" id="clipFrom"><input data-max="99" placeholder="ч" aria-label="От, часы"><i>:</i><input data-max="59" placeholder="мин" aria-label="От, минуты"><i>:</i><input data-max="59" placeholder="сек" aria-label="От, секунды"></div>
+  <span>До</span><div class="tc" id="clipTo"><input data-max="99" placeholder="ч" aria-label="До, часы"><i>:</i><input data-max="59" placeholder="мин" aria-label="До, минуты"><i>:</i><input data-max="59" placeholder="сек" aria-label="До, секунды"></div>
+  <small>Часы, минуты, секунды. Пустое «До» — до конца видео.</small>
   <p id="clipErr" hidden></p>
   <div><button class="act" onclick="clipSet(null)">Сбросить</button><button class="act accent" onclick="clipApply()">Применить</button></div>
 </div>
@@ -458,7 +461,7 @@ const EN = {
   'Компоненты не скачались. Проверь интернет и нажми «Обновить»; если GitHub у тебя не открывается, укажи прокси выше.': 'Components could not be downloaded. Check your connection and press Update; if GitHub does not open for you, set a proxy above.',
   'Версия': 'Version', 'звук возьму с YouTube': 'audio comes from YouTube', 'Ищу трек': 'Looking for the track', 'Подписываю файл': 'Writing tags and cover',
   'Spotify не поддерживается: музыка там защищена. Вставь ссылку на этот трек с YouTube или YouTube Music.': 'Spotify is not supported: its music is protected. Paste a link to this track from YouTube or YouTube Music.',
-  'Отрывок': 'Clip', 'От': 'From', 'До': 'To', 'конец': 'end', 'Например 1:30 или 90. Пустое «До» — до конца видео.': 'For example 1:30 or 90. Empty “To” means until the end.', 'Время пишется так: 1:30 или 90': 'Write time like 1:30 or 90', 'Конец отрывка должен быть позже начала': 'The end must be later than the start', 'Начало отрывка позже конца видео': 'The start is past the end of the video', 'Не понял время отрывка': 'Could not read the clip time',
+  'Отрывок': 'Clip', 'От': 'From', 'До': 'To', 'конец': 'end', 'Часы, минуты, секунды. Пустое «До» — до конца видео.': 'Hours, minutes, seconds. Empty “To” means until the end.', 'ч': 'h', 'мин': 'min', 'сек': 'sec', 'От, часы': 'From, hours', 'От, минуты': 'From, minutes', 'От, секунды': 'From, seconds', 'До, часы': 'To, hours', 'До, минуты': 'To, minutes', 'До, секунды': 'To, seconds', 'Ты разбил яичко': 'You broke the egg', 'Конец отрывка должен быть позже начала': 'The end must be later than the start', 'Начало отрывка позже конца видео': 'The start is past the end of the video', 'Не понял время отрывка': 'Could not read the clip time',
   'Нажми, чтобы взлететь': 'Click to fly', 'Счёт': 'Score', 'Рекорд': 'Best', 'Нажми ещё раз': 'Click to retry', 'Закрыть игру': 'Close the game', 'Esc — выйти': 'Esc to quit',
   'Проверить обновления': 'Check for updates', 'Программа перезапустится сама': 'The app will restart by itself', 'Проверяю…': 'Checking…', 'Обновляю…': 'Updating…', 'Скачано. Запусти программу заново': 'Downloaded. Start the app again',
   'Обновление не скачалось. Проверь интернет; если GitHub у тебя не открывается, укажи прокси выше.': 'The update did not download. Check your connection; if GitHub does not open for you, set a proxy above.', 'Компоненты': 'Components', 'Обновить': 'Update',
@@ -668,7 +671,18 @@ window.addEventListener('resize', menuClose);
 function setKind(v) { S.settings.kind = v; showKind(); api().put('kind', v); }
 /* отрывок: качать не всё, а кусок от и до. Время пишется как 1:30, 1:02:03 или просто секундами */
 let clip = null, infoDur = 0;
-const tcParse = v => { v = v.trim().replace(',', '.'); if (!v) return null; return /^\d+(\.\d+)?(:\d{1,2}(\.\d+)?){0,2}$/.test(v) ? v.split(':').reduce((a, x) => a * 60 + parseFloat(x), 0) : NaN; };
+const tcBoxes = id => [...$(id).querySelectorAll('input')];
+const tcGet = id => { const v = tcBoxes(id).map(i => i.value); return v.every(x => x === '') ? null : v.reduce((a, x) => a * 60 + (+x || 0), 0); };
+const tcSet = (id, s) => tcBoxes(id).forEach((i, k) => { const n = s == null ? null : [Math.floor(s / 3600), Math.floor(s % 3600 / 60), Math.floor(s % 60)][k]; i.value = n == null || (!k && !n) ? '' : k ? String(n).padStart(2, '0') : n; });
+document.querySelectorAll('.tc input').forEach(i => {
+  i.type = 'text'; i.inputMode = 'numeric'; i.autocomplete = 'off'; i.maxLength = 2;
+  const fix = () => { const d = i.value.replace(/\D/g, '').slice(0, 2); i.value = d === '' ? '' : String(Math.min(+d, +i.dataset.max)); };      // 96 секунд не бывает: станет 59
+  i.addEventListener('input', () => { fix(); if (i.value.length == 2 && i.nextElementSibling) i.nextElementSibling.nextElementSibling.focus(); });
+  i.addEventListener('blur', () => { fix(); if (i.value !== '' && +i.dataset.max == 59) i.value = i.value.padStart(2, '0'); });
+  const step = d => { i.value = String(Math.max(0, Math.min(+i.dataset.max, (+i.value || 0) + d))).padStart(+i.dataset.max == 59 ? 2 : 1, '0'); };
+  i.addEventListener('keydown', e => { if (e.key == 'ArrowUp' || e.key == 'ArrowDown') { e.preventDefault(); step(e.key == 'ArrowUp' ? 1 : -1); } });
+  i.addEventListener('wheel', e => { if (document.activeElement == i) { e.preventDefault(); step(e.deltaY < 0 ? 1 : -1); } }, {passive: false});
+});
 function clipText() {
   $('clipText').textContent = 'Отрывок: ' + (clip ? clock(clip[0]) + '–' + (clip[1] == null ? 'конец' : clock(clip[1])) : 'весь');
   $('clipBtn').classList.toggle('on', !!clip);
@@ -678,17 +692,17 @@ function clipOpen() {
   const box = $('clipBox'), btn = $('clipBtn');
   if (!box.hidden) return clipClose();
   menuClose();
-  $('clipFrom').value = clip && clip[0] ? clock(clip[0]) : ''; $('clipTo').value = clip && clip[1] != null ? clock(clip[1]) : ''; $('clipErr').hidden = true;
+  tcSet('clipFrom', clip && clip[0] ? clip[0] : null); tcSet('clipTo', clip ? clip[1] : null); $('clipErr').hidden = true;
   box.hidden = false; btn.setAttribute('aria-expanded', 'true');
   const r = btn.getBoundingClientRect();
   box.style.left = Math.max(8, Math.min(r.left, innerWidth - box.offsetWidth - 8)) + 'px';
   box.style.top = Math.max(8, r.bottom + 4 + box.offsetHeight > innerHeight ? r.top - 4 - box.offsetHeight : r.bottom + 4) + 'px';
-  $('clipFrom').focus();
+  tcBoxes('clipFrom')[1].focus();
 }
 function clipSet(v) { clip = v; clipText(); clipClose(); $('clipBtn').focus(); }
 function clipApply() {
-  const a = tcParse($('clipFrom').value), b = tcParse($('clipTo').value);
-  const bad = Number.isNaN(a) || Number.isNaN(b) ? 'Время пишется так: 1:30 или 90' : b != null && b <= (a || 0) ? 'Конец отрывка должен быть позже начала'
+  const a = tcGet('clipFrom'), b = tcGet('clipTo');
+  const bad = b != null && b <= (a || 0) ? 'Конец отрывка должен быть позже начала'
     : infoDur && (a || 0) >= infoDur ? 'Начало отрывка позже конца видео' : '';
   if (bad) { $('clipErr').textContent = bad; $('clipErr').hidden = false; return; }
   clipSet(!a && b == null ? null : [a || 0, b != null && infoDur && b > infoDur ? null : b]);
@@ -1173,6 +1187,7 @@ function gameOpen() {
     c.font = `500 15px ${sans}`; c.fillStyle = dim;
     if (st == 'ready') c.fillText(t('Нажми, чтобы взлететь'), W / 2, H * .42 + 74);
     if (st == 'over' && dead > .7) c.fillText(t('Рекорд') + ': ' + best + ' · ' + t('Нажми ещё раз'), W / 2, 104);
+    if (st == 'over' && dead > .35) { c.globalAlpha = Math.min(1, (dead - .35) * 3); c.font = `700 30px ${sans}`; c.fillStyle = ink; c.fillText(t('Ты разбил яичко'), W / 2, H * .4 - (1 - c.globalAlpha) * 10); c.globalAlpha = 1; }
   };
   const loop = now => {
     const dt = Math.min(.033, (now - last) / 1000 || .016); last = now;
