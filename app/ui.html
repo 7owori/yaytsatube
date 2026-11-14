@@ -507,7 +507,7 @@ const EN = {
 /* составные строки (с числами и названиями) переводятся по кускам, длинные куски раньше коротких */
 const EN_PARTS = [
   [/Обновить до /, 'Update to '], [/Отрывок: /, 'Clip: '], [/: весь$/, ': whole'], [/–конец$/, '–end'], [/Обновляю до /, 'Updating to '], [/Обновлено до /, 'Updated to '], [/последняя версия/, 'latest version'],
-  [/Связь рвётся, попытка (\d+) из (\d+)/, 'Connection keeps dropping, try $1 of $2'], [/Связь оборвалась, захожу заново \((\d+) из (\d+)\)/, 'Connection lost, starting over ($1 of $2)'], [/Связь оборвалась, пробую другим способом \((\d+) из (\d+)\)/, 'Connection lost, trying another way ($1 of $2)'],
+  [/Связь рвётся, попытка (\d+) из (\d+)/, 'Connection keeps dropping, try $1 of $2'], [/Связь оборвалась, захожу заново \((\d+) из (\d+)\)/, 'Connection lost, starting over ($1 of $2)'], [/Связь оборвалась, пробую другим способом \((\d+) из (\d+)\)/, 'Connection lost, trying another way ($1 of $2)'], [/Отрывок не отдали: качаю целиком и вырежу сам/, 'Clip refused: downloading the whole file to cut it here'], [/Вырезаю отрывок/, 'Cutting the clip'], [/Компоненты обновлены, пробую снова/, 'Components updated, trying again'],
   [/Не удалось скачать компоненты \(/, 'Could not fetch components ('], [/\)\. Проверь интернет и нажми «Обновить» в настройках\./, '). Check your connection and press Update in Settings.'],
   [/Первый запуск, докачиваю компоненты: /, 'First run, fetching components: '], [/Докачиваю компоненты: /, 'Fetching components: '], [/Обновляю компоненты: /, 'Updating components: '],
   [/Подключаюсь к серверу с видео/, 'Connecting to the video server'], [/Накладываю эквалайзер/, 'Applying the equalizer'], [/Перекодирую в /, 'Converting to '], [/Перекладываю в /, 'Repacking into '],
@@ -1044,12 +1044,12 @@ function gameOpen() {
   if (game) return;
   const box = $('game'), cv = $('gameCv'), c = cv.getContext('2d');
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  const shell = new Path2D($('eggPath').getAttribute('d')), mark = new Path2D('M24.5 28.5L41 39L24.5 49.5Z');
+  const shell = new Path2D($('eggPath').getAttribute('d')), split = new Path2D('M14 30L22 37L27 31L33 40L38 34L45 41');      // обычное яйцо в скорлупе и трещина на нём
   const K = .6, R = 19, GRAV = 1500, FLAP = -455;          // яйцо 60×76 рисуется в 0.6 размера; R — радиус для столкновений
   let W = 0, H = 0, floor = 0, best = 0, last = 0;
   try { best = +localStorage.getItem('eggBest') || 0; } catch (e) {}
   const g = game = {raf: 0};
-  let st, e, walls, puffs, bits, score, speed, spawn, dead, yolk, dots;
+  let st, e, walls, puffs, bits, score, speed, spawn, dead, yolk, dots, hurt;
   const fit = g.fit = () => {
     const d = devicePixelRatio || 1;
     W = box.clientWidth; H = box.clientHeight; floor = H - 46;
@@ -1057,7 +1057,7 @@ function gameOpen() {
     dots = Array.from({length: 46}, (_, i) => ({x: Math.random() * W, y: Math.random() * floor, r: .6 + Math.random() * 1.6, k: .15 + Math.random() * .5}));
   };
   const reset = () => {
-    st = 'ready'; score = 0; speed = 215; spawn = .9; dead = 0; yolk = 0; walls = []; puffs = []; bits = [];
+    st = 'ready'; score = 0; speed = 215; spawn = .9; dead = 0; yolk = 0; walls = []; puffs = []; bits = []; hurt = false;
     e = {x: Math.max(90, W * .28), y: H * .42, vx: 0, vy: 0, a: 0, av: 0, q: 0, qv: 0};      // a — поворот, q — растяжение вдоль оси
   };
   const flap = () => {
@@ -1075,11 +1075,16 @@ function gameOpen() {
     }
     return false;
   };
-  const crash = () => { st = 'fall'; e.vx = -150; e.vy = Math.min(e.vy, -240); e.av = 11 + Math.random() * 5; e.qv += 6; };
+  const crash = () => { st = 'fall'; hurt = true; e.vx = -150; e.vy = Math.min(e.vy, -240); e.av = 11 + Math.random() * 5; e.qv += 6; };
   const crack = () => {
     st = 'over'; dead = 0;
     if (score > best) { best = score; try { localStorage.setItem('eggBest', best); } catch (x) {} }
-    for (const s of [-1, 1]) bits.push({x: e.x, y: e.y, vx: s * (90 + Math.random() * 70) + e.vx * .3, vy: -260 - Math.random() * 120, a: e.a, av: s * (5 + Math.random() * 6), half: s});
+    for (let i = 0; i < 34; i++) {                          // скорлупа разлетается мелкими осколками: у каждого своя форма, скорость и вращение
+      const dir = Math.random() * 6.283, far = Math.random(), size = 2.5 + Math.random() * 5.5, n = 3 + (Math.random() * 3 | 0);
+      bits.push({x: e.x + Math.cos(dir) * 14 * far, y: e.y + Math.sin(dir) * 18 * far, vx: Math.cos(dir) * (60 + Math.random() * 260) + e.vx * .3, vy: -80 - Math.random() * 380,
+        a: Math.random() * 6.283, av: (Math.random() - .5) * 26, rest: false, tone: Math.random(),
+        pts: Array.from({length: n}, (_, k) => { const t = k / n * 6.283 + Math.random() * .7, r = size * (.55 + Math.random() * .6); return [Math.cos(t) * r, Math.sin(t) * r * .8]; })});
+    }
     for (let i = 0; i < 12; i++) puffs.push({x: e.x, y: floor - 4, vx: (Math.random() - .5) * 420, vy: -Math.random() * 260, r: 2 + Math.random() * 3, t: 0, y2: 1});
   };
   const step = dt => {
@@ -1116,18 +1121,28 @@ function gameOpen() {
     }
     if (st == 'over') {
       dead += dt; yolk = Math.min(1, yolk + dt * 3.2);
-      for (const b of bits) { b.vy += GRAV * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.a += b.av * dt; if (b.y > floor - 10) { b.y = floor - 10; b.vy *= -.3; b.vx *= .6; b.av *= .5; } }
+      for (const b of bits) {
+        if (b.rest) continue;
+        b.vy += GRAV * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.a += b.av * dt;
+        if (b.y > floor - 2) {                               // осколок стукнулся о пол: подпрыгнул пониже или улёгся
+          b.y = floor - 2; b.vx *= .55; b.av *= .5;
+          if (b.vy > 90) b.vy *= -.34; else { b.vy = 0; b.rest = true; b.a = Math.round(b.a / 3.1416) * 3.1416; }
+        }
+      }
     }
     for (const p of puffs) { p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.y2) p.vy += GRAV * .6 * dt; }
     puffs = puffs.filter(p => p.t < .5);
     for (const d of dots) { if (st == 'fly') d.x -= speed * d.k * dt * .35; if (d.x < -4) { d.x = W + 4; d.y = Math.random() * floor; } }
   };
-  const eggAt = (x, y, a, q, half) => {
+  const eggAt = (x, y, a, q) => {
     const sy = 1 + q, sx = 1 / Math.sqrt(Math.max(.3, sy));                            // вытянулось в длину — сузилось в ширину
     c.save(); c.translate(x, y); c.rotate(a); c.scale(K * sx, K * sy); c.translate(-30, -40);
-    if (half) { c.beginPath(); c.rect(half < 0 ? -10 : 30, -10, 40, 100); c.clip(); }
-    c.fillStyle = '#FF0000'; c.fill(shell);
-    if (!half) { c.fillStyle = c.strokeStyle = '#FFFFFF'; c.lineWidth = 7; c.lineJoin = 'round'; c.fill(mark); c.stroke(mark); }
+    const body = c.createRadialGradient(22, 26, 4, 30, 42, 44);
+    body.addColorStop(0, '#FFFCF5'); body.addColorStop(.6, '#F3E7D3'); body.addColorStop(1, '#DFCDB2');
+    c.fillStyle = body; c.fill(shell);
+    c.lineWidth = 1.6; c.strokeStyle = 'rgba(96,72,40,.35)'; c.stroke(shell);
+    c.fillStyle = 'rgba(255,255,255,.55)'; c.beginPath(); c.ellipse(21, 24, 5, 9, -.5, 0, 7); c.fill();          // блик
+    if (hurt) { c.lineWidth = 2; c.lineJoin = 'round'; c.strokeStyle = 'rgba(70,50,25,.75)'; c.stroke(split); }    // после удара — трещина
     c.restore();
   };
   const paint = () => {
@@ -1146,7 +1161,12 @@ function gameOpen() {
     if (st == 'over') {                                                                // разбилось: белок, желток и две половинки скорлупы
       c.fillStyle = '#F4F1EA'; c.beginPath(); c.ellipse(e.x, floor - 1, 44 * yolk, 9 * yolk, 0, 0, 7); c.fill();
       c.fillStyle = '#FFC83D'; c.beginPath(); c.ellipse(e.x + 4, floor - 5, 15 * yolk, 9 * yolk, 0, 0, 7); c.fill();
-      for (const b of bits) eggAt(b.x, b.y, b.a, 0, b.half);
+      for (const b of bits) {
+        c.save(); c.translate(b.x, b.y); c.rotate(b.a); c.beginPath();
+        b.pts.forEach(([px, py], k) => k ? c.lineTo(px, py) : c.moveTo(px, py)); c.closePath();
+        c.fillStyle = b.tone > .5 ? '#F3E7D3' : '#FFFAF0'; c.fill(); c.lineWidth = .8; c.strokeStyle = 'rgba(96,72,40,.4)'; c.stroke();
+        c.restore();
+      }
     } else eggAt(e.x, e.y, e.a, e.q);
     c.textAlign = 'center'; c.fillStyle = ink;
     c.font = `700 44px ${sans}`; if (st != 'ready') c.fillText(score, W / 2, 74);
@@ -1166,7 +1186,7 @@ function gameOpen() {
   cv.onpointerdown = flap;
   addEventListener('keydown', g.key, true); addEventListener('resize', fit);
   box.hidden = false; fit(); reset(); g.raf = requestAnimationFrame(loop);
-  g.peek = () => ({st, score, y: e.y, a: e.a, q: e.q, walls: walls.length, best});   // для проверки
+  g.peek = () => ({st, score, y: e.y, a: e.a, q: e.q, walls: walls.length, best, bits: bits.length, rest: bits.filter(b => b.rest).length});   // для проверки
   g.flap = flap;
 }
 async function add() {
