@@ -373,6 +373,7 @@ body.boot .corner{animation:fade .6s ease-out .55s backwards}
     <div class="chips" id="optRow">
       <button class="chip drop" id="qChip" aria-haspopup="menu" aria-expanded="false" onclick="menuOpen(this, 'quality')"><svg viewBox="0 0 14 14" aria-hidden="true"><rect x="1.2" y="2.4" width="11.6" height="7.6" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.6 12.2H9.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span></span></button>
       <button class="chip drop" id="vcChip" aria-haspopup="menu" aria-expanded="false" onclick="menuOpen(this, 'vcodec')"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M5 3.2L1.6 7L5 10.8M9 3.2L12.4 7L9 10.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg><span></span></button>
+      <button class="chip drop" id="prChip" aria-haspopup="menu" aria-expanded="false" onclick="menuOpen(this, 'prores')" hidden><svg viewBox="0 0 14 14" aria-hidden="true"><rect x="1.4" y="2.2" width="11.2" height="2.4" rx="1.2" fill="currentColor"/><rect x="1.4" y="5.8" width="8.2" height="2.4" rx="1.2" fill="currentColor" opacity=".7"/><rect x="1.4" y="9.4" width="5.2" height="2.4" rx="1.2" fill="currentColor" opacity=".45"/></svg><span></span></button>
       <button class="chip drop" id="acChip" aria-haspopup="menu" aria-expanded="false" onclick="menuOpen(this, 'aformat')" hidden><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M5 3.2L1.6 7L5 10.8M9 3.2L12.4 7L9 10.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg><span></span></button>
       <button class="chip" id="eqBtn" aria-expanded="false" aria-controls="eq" onclick="eqOpen(eqPanel().hidden)"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3 1.5V12.5M7 1.5V12.5M11 1.5V12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="3" cy="9" r="1.7" fill="currentColor"/><circle cx="7" cy="4.5" r="1.7" fill="currentColor"/><circle cx="11" cy="8" r="1.7" fill="currentColor"/></svg><span id="eqBtnText">Эквалайзер</span></button>
       <button class="chip" id="clipBtn" aria-haspopup="dialog" aria-expanded="false" onclick="clipOpen()"><svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="3.4" cy="3.6" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="3.4" cy="10.4" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 4.6L12.4 10.6M5 9.4L12.4 3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span id="clipText">Отрывок: весь</span></button></div>
@@ -491,7 +492,7 @@ const EN = {
   'Качество': 'Quality', 'Максимум': 'Maximum', 'лучшее, что есть у видео': 'the best the video has', 'Кодек': 'Codec',
   'самый совместимый, играет везде': 'most compatible, plays everywhere', 'файл заметно меньше; перекодирую сам, это долго': 'much smaller file; converted locally, takes a while',
   'современный и компактный, играет не везде': 'modern and compact, not supported everywhere', 'родной кодек YouTube': "YouTube's own codec",
-  'для монтажа; перекодирую сам, файл огромный': 'for editing; converted locally, huge file', 'играет везде': 'plays everywhere',
+  'для монтажа; перекодирую сам, файл огромный': 'for editing; converted locally, huge file', 'Профиль': 'Profile', 'самый лёгкий, для черновой работы': 'lightest, for rough cuts', 'легче обычного, качество чуть ниже': 'lighter than standard, slightly lower quality', 'обычный ProRes': 'standard ProRes', 'качество выше, файл больше': 'higher quality, bigger file', 'цвет без потерь, файл самый большой': 'full colour detail, the biggest file', 'играет везде': 'plays everywhere',
   'AAC, как у самого YouTube': 'AAC, the same as YouTube serves', 'лучшее качество на размер': 'best quality for the size',
   'сжатие без потерь, файл большой': 'lossless compression, large file', 'без сжатия, самый большой': 'uncompressed, the largest',
   'Изменения не применены': 'Changes not applied', 'Применён к следующим загрузкам': 'Applied to the next downloads',
@@ -654,10 +655,18 @@ const MENUS = {
     ['av1', 'AV1 · MP4', 'современный и компактный, играет не везде'],
     ['vp9', 'VP9 · WebM', 'родной кодек YouTube'],
     ['prores', 'ProRes · MOV', 'для монтажа; перекодирую сам, файл огромный']] },
+  prores: { chip: 'prChip', label: 'Профиль', items: [
+    ['proxy', 'Proxy', 'самый лёгкий, для черновой работы'],
+    ['lt', 'LT', 'легче обычного, качество чуть ниже'],
+    ['422', '422', 'обычный ProRes'],
+    ['hq', '422 HQ', 'качество выше, файл больше'],
+    ['4444', '4444', 'цвет без потерь, файл самый большой']] },
   aformat: { chip: 'acChip', label: 'Кодек', items: [['mp3', 'MP3', 'играет везде'], ['m4a', 'M4A', 'AAC, как у самого YouTube'], ['opus', 'Opus', 'лучшее качество на размер'], ['flac', 'FLAC', 'сжатие без потерь, файл большой'], ['wav', 'WAV', 'без сжатия, самый большой']] },
 };
 function chipText() {
+  if (!MENUS.prores.items.some(i => i[0] == S.settings.prores)) S.settings.prores = '422';      // настройки от старой версии: профиля ещё нет
   for (const [key, m] of Object.entries(MENUS)) $(m.chip).querySelector('span').textContent = m.label + ': ' + (m.items.find(i => i[0] == S.settings[key]) || m.items[0])[1];
+  $('prChip').hidden = S.settings.kind == 'audio' || S.settings.vcodec != 'prores';      // профиль нужен только ProRes
 }
 function menuClose() {
   $('menu').hidden = true;
@@ -679,7 +688,7 @@ function menuOpen(btn, key) {
   box.hidden = false; btn.setAttribute('aria-expanded', 'true');
   box.style.left = Math.min(r.left, innerWidth - box.offsetWidth - 8) + 'px';
   box.style.top = Math.max(8, r.bottom + 4 + box.offsetHeight > innerHeight ? Math.min(r.top - 4, innerHeight - 8) - box.offsetHeight : r.bottom + 4) + 'px';
-  box.querySelector('[aria-checked=true]').focus();
+  (box.querySelector('[aria-checked=true]') || box.querySelector('button')).focus();
 }
 document.addEventListener('pointerdown', e => { if (!$('menu').hidden && !e.target.closest('#menu, .chip.drop')) menuClose(); });
 document.addEventListener('keydown', e => {
@@ -740,7 +749,7 @@ document.addEventListener('keydown', e => {
 window.addEventListener('resize', clipClose);
 function showKind() {
   const audio = S.settings.kind == 'audio';
-  $('qChip').hidden = $('vcChip').hidden = audio; $('acChip').hidden = !audio;
+  $('qChip').hidden = $('vcChip').hidden = audio; $('acChip').hidden = !audio; $('prChip').hidden = audio || S.settings.vcodec != 'prores';
   menuClose();
 }
 
