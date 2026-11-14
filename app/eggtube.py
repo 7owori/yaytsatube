@@ -18,7 +18,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '3.5.1'
+VERSION = '4.0.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
+SHOWN = '1.1'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
@@ -73,7 +74,7 @@ PT_MAX, PT_GAIN, PT_F, PT_Q = 12, 18, (20, 20000), (0.3, 8)
 PT_SOFT = 1.5        # полкам узкая добротность не нужна: даёт горб рядом с частотой
 CUT_FLAT, CUT_Q, CUT_STEPS = 0.71, (0.5, 3.0), 4   # срез: ровный склон при 0.71; крутизна 12, 24, 36 или 48 дБ/окт
 FS = 48000
-DEFAULTS = {'dir': '', 'kind': 'video', 'quality': '1080', 'vcodec': 'h264', 'aformat': 'mp3', 'theme': 'dark', 'lang': 'ru', 'layout': 'wide', 'size': None, 'tray': True, 'tray_told': False, 'seen': '', 'clip': True, 'proxy': '', 'cookies': '',
+DEFAULTS = {'dir': '', 'kind': 'video', 'quality': '1080', 'vcodec': 'h264', 'aformat': 'mp3', 'theme': 'dark', 'lang': 'ru', 'layout': 'wide', 'size': None, 'tray': True, 'tray_told': False, 'seen': '', 'net_mode': '', 'clip': True, 'proxy': '', 'cookies': '',
             'history': [], 'lnk': '', 'eq': [0] * 10, 'eq_mode': 'bands', 'eq_points': []}
 HISTORY_MAX = 40
 
@@ -616,6 +617,11 @@ def code_version(text):
     return m.group(1) if m else ''
 
 
+def code_name(text):
+    m = re.search(r"^SHOWN = '([\w.]+)'", text, re.M)
+    return m.group(1) if m else code_version(text)
+
+
 def update_bases():
     """Откуда качать обновление. Сначала по номеру последнего коммита: так оба файла точно из одной версии и нет
     задержки, с которой GitHub обновляет ссылку на ветку. Не вышло узнать номер — прямо из ветки и с зеркала."""
@@ -668,10 +674,10 @@ def update_run(apply):
             return
         if not apply:
             with LOCK:
-                UPDATE.update(state='found', ver=new, error='')
+                UPDATE.update(state='found', ver=code_name(code), error='')
             return
         with LOCK:
-            UPDATE.update(state='load', ver=new, error='')
+            UPDATE.update(state='load', ver=code_name(code), error='')
         grab('app/ui.html', tmp / 'ui.html', bases)
         compile(code, 'eggtube.py', 'exec')                       # битый файл не должен стать программой
         if '</html>' not in (tmp / 'ui.html').read_text(encoding='utf-8')[-200:]:
@@ -693,7 +699,7 @@ def update_run(apply):
             RESTART['quit']()
         else:
             with LOCK:
-                UPDATE.update(state='error', ver=new, error='Скачано. Запусти программу заново')
+                UPDATE.update(state='error', ver=code_name(code), error='Скачано. Запусти программу заново')
     except Exception as e:
         with LOCK:
             UPDATE.update(state='error', error=str(e)[:200])
@@ -778,11 +784,17 @@ def ytdlp_cmd():
 
 
 # ---------- загрузка ----------
+# Способы соединения с YouTube. Обычный у части провайдеров рвётся (SSL: record layer failure): фильтр провайдера
+# узнаёт программу по «почерку» соединения. Тогда yt-dlp представляется браузером Chrome, а если и так не вышло —
+# файл качает curl из Windows, у которого соединение устроено иначе. Сработавший способ запоминается.
+NET_MODES = {'': [], 'chrome': ['--impersonate', 'chrome'], 'curl': ['--downloader', 'curl']}
+
+
 def net_args(st):
     a = ['--ffmpeg-location', os.path.dirname(tool_path('ffmpeg.exe'))] if have(TOOLS[1]) else []
     if st.get('proxy'):
         a += ['--proxy', st['proxy']]
-    return a
+    return a + NET_MODES.get(st.get('net_mode') or '', [])
 
 
 def build_args(job, st, simple=False):
@@ -792,8 +804,7 @@ def build_args(job, st, simple=False):
         '--ignore-config', '--no-playlist', '--newline', '--no-colors', '--encoding', 'utf-8',
         '--windows-filenames', '--no-mtime', '--progress', '--no-simulate',
         '--no-quiet', '--verbose',           # --print включает тихий режим, а в нём не видно ни повторов, ни причин задержки
-        '--socket-timeout', '15', '--retries', '10', '--fragment-retries', '10', '--retry-sleep', '1',
-        '--http-chunk-size', '10M',          # короткие запросы: длинное соединение с YouTube у некоторых рвётся на середине
+        '--socket-timeout', '15', '--retries', '4', '--fragment-retries', '4', '--retry-sleep', '1',
         '--concurrent-fragments', '4',       # если дорожка всё же кусочная, качать по четыре куска разом
         '--paths', str(out_dir(st)), '--output', (job.get('_name') or '%(title).120B') + ' [%(id)s]' + (' EQ' if eq else '') + '.%(ext)s',
         '--print', 'before_dl:JT_ID:%(id)s',
@@ -886,9 +897,9 @@ def finish(job, plan):
     return 0, '', out
 
 
-ATTEMPTS = 2
+ATTEMPTS = len(NET_MODES)
 NET_ERRORS = (r'http error (403|429|5\d\d)|bytes read|more expected|incomplete|timed out|timeout|'
-              r'connection (reset|aborted)|remote end closed|10054|10060|giving up after')
+              r'connection (reset|aborted)|remote end closed|10054|10060|giving up after|ssl|record layer|impersonat')
 HINTS = (
     (r'not a bot|sign in to confirm|login required|use --cookies', 'YouTube просит подтвердить, что ты не бот. '
      'Попробуй позже или включи VPN либо прокси.'),
@@ -1019,13 +1030,19 @@ def run_job(job):
             meta = spotify_meta(job['url'])
             name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', ' ', spotify_name(meta).replace(' — ', ' - ')).strip()[:120]
             job.update(title=spotify_name(meta), _query=source(job['url']), _name=name.replace('%', '%%'))
+        modes = sorted(NET_MODES, key=lambda m: m != st['net_mode'])      # начать с того способа, что сработал в прошлый раз
         for attempt in range(1, ATTEMPTS + 1):
+            st = dict(st, net_mode=modes[attempt - 1])
             code, err, tail = run_once(job, st, False)
+            if not code and job['status'] != 'cancel' and load()['net_mode'] != st['net_mode']:
+                keep = load()
+                keep['net_mode'] = st['net_mode']
+                save(keep)
             flaky = re.search(NET_ERRORS, (err + ' ' + ' '.join(x for x in tail[-12:] if 'Got error' in x or 'Giving up' in x)).lower())
             if not code or job['status'] == 'cancel' or attempt == ATTEMPTS or not flaky:
                 break
             # обрыв или отказ на середине: новый заход берёт свежие ссылки и продолжает с того же места (кусок .part цел)
-            job.update(stage=f'Связь оборвалась, захожу заново ({attempt + 1} из {ATTEMPTS})', got=0)
+            job.update(stage=f'Связь оборвалась, пробую другим способом ({attempt + 1} из {ATTEMPTS})', got=0)
             for _ in range(40):
                 if job['status'] == 'cancel':
                     break
@@ -1272,7 +1289,7 @@ class Api:
         if st['seen'] != VERSION:
             st['seen'] = VERSION
             save(st)
-        return {'version': VERSION, 'updated': fresh, 'bands': list(EQ_BANDS), 'eq_max': EQ_MAX,
+        return {'version': SHOWN, 'updated': fresh, 'bands': list(EQ_BANDS), 'eq_max': EQ_MAX,
                 'pt': {'max': PT_MAX, 'gain': PT_GAIN, 'f': PT_F, 'q': PT_Q, 'soft': PT_SOFT, 'fs': FS,
                        'flat': CUT_FLAT, 'cutq': CUT_Q, 'steps': CUT_STEPS},
                 'settings': {k: st[k] for k in ('kind', 'quality', 'vcodec', 'aformat', 'theme', 'lang', 'layout', 'tray', 'clip', 'proxy', 'cookies',
@@ -1582,7 +1599,7 @@ def stop_others():
 def register():
     import winreg
     with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY, 0, winreg.KEY_SET_VALUE) as k:
-        for name, value in (('DisplayName', TITLE), ('DisplayVersion', VERSION), ('Publisher', 'owori'),
+        for name, value in (('DisplayName', TITLE), ('DisplayVersion', SHOWN), ('Publisher', 'owori'),
                             ('DisplayIcon', str(APP_EXE)), ('InstallLocation', str(APP_DIR)),
                             ('UninstallString', f'"{APP_EXE}" --uninstall')):
             winreg.SetValueEx(k, name, 0, winreg.REG_SZ, value)
@@ -1593,7 +1610,7 @@ def register():
 def install():
     """Копирует программу в папку пользователя, ставит ярлыки и запись в «Установленных приложениях».
     True — установлено и запущена установленная копия; False — человек отказался; None — не вышло."""
-    if not ask(word('install', v=VERSION) + (word('replace') if APP_EXE.is_file() else '')):
+    if not ask(word('install', v=SHOWN) + (word('replace') if APP_EXE.is_file() else '')):
         return False
     try:
         me = Path(sys.executable)
@@ -1766,7 +1783,7 @@ def selftest():
     from PIL import Image
     Image.open(ASSETS / 'icon.ico').load()
     assert '</html>' in (ASSETS / 'ui.html').read_text(encoding='utf-8')[-200:]
-    Path(sys.argv[sys.argv.index('--selftest') + 1]).write_text(VERSION)
+    Path(sys.argv[sys.argv.index('--selftest') + 1]).write_text(SHOWN)
 
 
 def main():
