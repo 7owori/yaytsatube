@@ -3,6 +3,7 @@ import base64
 import ctypes
 import glob
 import html
+import io
 import json
 import math
 import os
@@ -17,7 +18,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '3.5.0'
+VERSION = '3.5.1'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
@@ -349,7 +350,7 @@ BROWSE = threading.Lock()
 SPOT_PIC = r'https://(?:i\.scdn\.co|[\w.-]+\.spotifycdn\.com)/image/\w+'      # обложки лежат на разных адресах
 BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
 SPOT_ONLY = 'Со Spotify качаются только отдельные треки: вставь ссылку на трек, а не на альбом или плейлист.'
-SPOT_FAIL = 'Не получилось узнать название трека на Spotify. Проверь интернет или укажи прокси в настройках.'
+SPOT_FAIL = 'Не получилось узнать, что это за трек: Spotify не отдаёт данные по твоему адресу. Включи VPN на весь компьютер или укажи прокси в настройках.'
 
 
 class Plain(Exception):
@@ -525,6 +526,21 @@ def spotify_meta(url):
             seen.append(f'track/{way or "python"}: ' + ' '.join(re.findall(r'<title>(.*?)</title>', page, re.S))[:80])
         except Exception as e:
             seen.append(f'track/{way or "python"}: {e}'[:160])
+    for way in (('curl', '') if WIN else ('',)):
+        if got['title'] and got['artist']:
+            break
+        try:                                # Spotify в России не работает и отдаёт пустую страницу; о треке знает и song.link
+            page = web_text(f'https://song.link/s/{tid}', way)
+            data = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page, re.S)
+            ent = (json.loads(data.group(1)).get('props', {}).get('pageProps', {}).get('pageData') or {}).get('entityData') if data else None
+            if isinstance(ent, dict) and isinstance(ent.get('title'), str) and isinstance(ent.get('artistName'), str):
+                got.update(title=ent['title'].strip(), artist=ent['artistName'].strip(),
+                           thumb=ent['thumbnailUrl'] if str(ent.get('thumbnailUrl') or '').startswith('https://') else '',
+                           dur=ent['duration'] / 1000 if isinstance(ent.get('duration'), (int, float)) else None)
+            else:
+                seen.append(f'song.link/{way or "python"}: данных трека нет ({len(page)} симв.)')
+        except Exception as e:
+            seen.append(f'song.link/{way or "python"}: {e}'[:160])
     if not (got['title'] and got['artist']):   # без исполнителя по одному названию находится чужая песня: лучше честно отказать
         try:
             (HOME / 'spotify.log').write_text('\n'.join([url, *seen]), 'utf-8')
@@ -600,12 +616,34 @@ def code_version(text):
     return m.group(1) if m else ''
 
 
-def grab(name, dest):
-    """Файл из репозитория на GitHub; если GitHub не отдал — с его зеркала."""
-    last = None
-    for base in SOURCES:
+def update_bases():
+    """Откуда качать обновление. Сначала по номеру последнего коммита: так оба файла точно из одной версии и нет
+    задержки, с которой GitHub обновляет ссылку на ветку. Не вышло узнать номер — прямо из ветки и с зеркала."""
+    bases = []
+    try:
+        tmp = HOME / 'commit.tmp'
+        HOME.mkdir(parents=True, exist_ok=True)
         try:
-            return fetch(base + name, dest, 'обновление')
+            fetch(f'https://api.github.com/repos/{REPO}/commits/main', tmp, 'обновление')
+            sha = re.search(r'"sha"\s*:\s*"([0-9a-f]{40})"', tmp.read_text('utf-8', 'replace'))
+        finally:
+            tmp.unlink(missing_ok=True)
+        if sha:
+            bases.append((f'https://raw.githubusercontent.com/{REPO}/{sha.group(1)}/', ''))
+    except Exception:
+        pass
+    return bases + [(SOURCES[0], f'?t={int(time.time())}'), (SOURCES[1], '')]
+
+
+def grab(name, dest, bases):
+    """Файл программы из репозитория; источники пробуются по очереди, сработавший становится первым."""
+    last = None
+    for base in list(bases):
+        try:
+            fetch(base[0] + name + base[1], dest, 'обновление')
+            bases.remove(base)
+            bases.insert(0, base)
+            return
         except Exception as e:
             last = e
     raise last
@@ -618,7 +656,8 @@ def update_run(apply):
     try:
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True)
-        grab('app/eggtube.py', tmp / 'eggtube.py')
+        bases = update_bases()
+        grab('app/eggtube.py', tmp / 'eggtube.py', bases)
         code = (tmp / 'eggtube.py').read_text(encoding='utf-8')
         new = code_version(code)
         if not new:
@@ -633,17 +672,22 @@ def update_run(apply):
             return
         with LOCK:
             UPDATE.update(state='load', ver=new, error='')
-        grab('app/ui.html', tmp / 'ui.html')
+        grab('app/ui.html', tmp / 'ui.html', bases)
         compile(code, 'eggtube.py', 'exec')                       # битый файл не должен стать программой
         if '</html>' not in (tmp / 'ui.html').read_text(encoding='utf-8')[-200:]:
             raise OSError('интерфейс скачан не целиком')
-        ico = ASSETS / 'icon.ico'
-        try:
-            shutil.copyfile(ico if ico.is_file() else ASSETS.parent / 'assets' / 'icon.ico', tmp / 'icon.ico')
-        except OSError:
-            pass                              # без значка в трее жить можно, без обновления — нет
-        shutil.rmtree(UPD, ignore_errors=True)
-        os.replace(tmp, UPD)
+        UPD.mkdir(parents=True, exist_ok=True)
+        if not (UPD / 'icon.ico').is_file():
+            ico = ASSETS / 'icon.ico'
+            try:
+                shutil.copyfile(ico if ico.is_file() else ASSETS.parent / 'assets' / 'icon.ico', UPD / 'icon.ico')
+            except OSError:
+                pass                          # без значка в трее жить можно, без обновления — нет
+        # Заменяем по одному файлу, а не папку целиком: папка занята самой работающей программой, и Windows её не отдаёт.
+        # Код кладём последним: по его номеру версии программа при запуске понимает, что обновление готово.
+        (UPD / 'starting').unlink(missing_ok=True)
+        os.replace(tmp / 'ui.html', UPD / 'ui.html')
+        os.replace(tmp / 'eggtube.py', UPD / 'eggtube.py')
         if WIN and FROZEN and RESTART['quit']:
             RESTART['on'] = True
             RESTART['quit']()
@@ -655,6 +699,18 @@ def update_run(apply):
             UPDATE.update(state='error', error=str(e)[:200])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def update_watch():
+    """Тихо узнаёт о новой версии: вскоре после запуска и дальше раз в двадцать минут, пока программа открыта."""
+    pause = threading.Event()
+    pause.wait(6)
+    while True:
+        with LOCK:
+            idle = UPDATE['state'] in ('idle', 'fresh', 'error')
+        if idle:
+            Api().update_check()
+        pause.wait(1200)
 
 
 def run_update():
@@ -1644,7 +1700,9 @@ def gui():
             import pystray
             from PIL import Image
             ico = ASSETS / 'icon.ico'            # в собранном exe лежит рядом, при запуске из исходников — в assets
-            icon = pystray.Icon('Yaytsatube', Image.open(ico if ico.is_file() else ASSETS.parent / 'assets' / 'icon.ico'), TITLE, pystray.Menu(
+            with open(ico if ico.is_file() else ASSETS.parent / 'assets' / 'icon.ico', 'rb') as f:
+                picture = Image.open(io.BytesIO(f.read()))     # из памяти: открытый файл значка мешал бы обновлению
+            icon = pystray.Icon('Yaytsatube', picture, TITLE, pystray.Menu(
                 pystray.MenuItem(word('open'), show, default=True), pystray.MenuItem(word('quit'), leave)))
             tray['icon'] = icon
             icon.run()
@@ -1682,7 +1740,7 @@ def gui():
     threading.Thread(target=prepare, daemon=True).start()
     threading.Thread(target=tray_run, daemon=True).start()
     threading.Thread(target=tray_title, daemon=True).start()
-    threading.Thread(target=lambda: (time.sleep(6), Api().update_check()), daemon=True).start()   # тихо узнать, есть ли новая версия
+    threading.Thread(target=update_watch, daemon=True).start()
     webview.start(started)
     keep_size()
     tray['quit'] = True
