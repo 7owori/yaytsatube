@@ -16,8 +16,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '4.7.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
-SHOWN = '3.1'
+VERSION = '4.8.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
+SHOWN = '3.2'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
@@ -57,6 +57,9 @@ VCODECS = {
 }
 VCODEC_HAVE = {'h265': r'^(hev|hvc|h265|hevc)', 'prores': r'^(prores|ap[c4])'}   # как сайт называет уже готовую дорожку
 VCODEC_NAME = {'h265': 'H.265', 'prores': 'ProRes'}
+# профили ProRes: (номер профиля в ffmpeg, формат пикселей, название). У 4444 цвет хранится без прореживания
+PRORES = {'proxy': ('0', 'yuv422p10le', 'Proxy'), 'lt': ('1', 'yuv422p10le', 'LT'), '422': ('2', 'yuv422p10le', '422'),
+          'hq': ('3', 'yuv422p10le', '422 HQ'), '4444': ('4', 'yuv444p10le', '4444')}
 VCODEC_OLD = {'auto': 'h264'}   # настройки прошлых версий: 'vp9-webm' -> 'vp9', 'auto-mkv' -> 'h264'
 ACODECS = {'mp3': ['-c:a', 'libmp3lame', '-q:a', '0'], 'm4a': ['-c:a', 'aac', '-b:a', '256k'],          # чем кодировать звук в ffmpeg
            'opus': ['-c:a', 'libopus', '-b:a', '160k'], 'flac': ['-c:a', 'flac'], 'wav': ['-c:a', 'pcm_s16le']}
@@ -72,7 +75,7 @@ PT_MAX, PT_GAIN, PT_F, PT_Q = 12, 18, (20, 20000), (0.3, 8)
 PT_SOFT = 1.5        # полкам узкая добротность не нужна: даёт горб рядом с частотой
 CUT_FLAT, CUT_Q, CUT_STEPS = 0.71, (0.5, 3.0), 4   # срез: ровный склон при 0.71; крутизна 12, 24, 36 или 48 дБ/окт
 FS = 48000
-DEFAULTS = {'dir': '', 'kind': 'video', 'quality': '1080', 'vcodec': 'h264', 'aformat': 'mp3', 'theme': 'dark', 'lang': 'ru', 'layout': 'wide', 'size': None, 'tray': True, 'tray_told': False, 'seen': '', 'net_mode': '', 'clip': True, 'proxy': '', 'cookies': '',
+DEFAULTS = {'dir': '', 'kind': 'video', 'quality': '1080', 'vcodec': 'h264', 'aformat': 'mp3', 'theme': 'dark', 'lang': 'ru', 'layout': 'wide', 'size': None, 'tray': True, 'tray_told': False, 'seen': '', 'net_mode': '', 'prores': '422', 'clip': True, 'proxy': '', 'cookies': '',
             'history': [], 'lnk': '', 'eq': [0] * 10, 'eq_mode': 'bands', 'eq_points': []}
 HISTORY_MAX = 40
 
@@ -103,6 +106,8 @@ def load():
     st['vcodec'] = VCODEC_OLD.get(old, old)
     if st['vcodec'] not in VCODECS:
         st['vcodec'] = 'h264'
+    if st.get('prores') not in PRORES:
+        st['prores'] = '422'
     if st.get('aformat') not in ACODECS:
         st['aformat'] = 'mp3'
     if st.get('theme') not in THEMES:
@@ -668,12 +673,16 @@ def post_plan(job):
         return {'ext': src_ext, 'v': ['-c:v', 'copy'], 'af': af, 'stage': 'Накладываю эквалайзер',
                 'a': ['-c:a', 'libopus', '-b:a', '160k'] if src_ext == 'webm' else ['-c:a', 'aac', '-b:a', '192k']}
     ready = bool(re.search(VCODEC_HAVE[key], job.get('vc') or '', re.I))     # сайт сам дал нужный кодек: картинку не трогаем
+    name = VCODEC_NAME[key]
     if key == 'prores':
         audio = ['-c:a', 'pcm_s16le']
+        number, pixels, title = PRORES.get(job.get('prores'), PRORES['422'])
+        recode = ['-c:v', 'prores_ks', '-profile:v', number, '-pix_fmt', pixels, '-vendor', 'apl0']
+        name += ' ' + title
     else:
         audio = ['-c:a', 'copy'] if not af and re.search(r'^(mp4a|aac)', job.get('ac') or '', re.I) else ['-c:a', 'aac', '-b:a', '192k']
     return {'ext': VCODECS[key][1], 'v': ['-c:v', 'copy'] if ready else recode, 'a': audio, 'af': af,
-            'stage': 'Перекладываю в ' + VCODECS[key][1].upper() if ready else 'Перекодирую в ' + VCODEC_NAME[key]}
+            'stage': 'Перекладываю в ' + VCODECS[key][1].upper() if ready else 'Перекодирую в ' + name}
 
 
 def finish(job, plan):
@@ -1122,7 +1131,7 @@ class Api:
         return {'version': SHOWN, 'updated': fresh, 'bands': list(EQ_BANDS), 'eq_max': EQ_MAX,
                 'pt': {'max': PT_MAX, 'gain': PT_GAIN, 'f': PT_F, 'q': PT_Q, 'soft': PT_SOFT, 'fs': FS,
                        'flat': CUT_FLAT, 'cutq': CUT_Q, 'steps': CUT_STEPS},
-                'settings': {k: st[k] for k in ('kind', 'quality', 'vcodec', 'aformat', 'theme', 'lang', 'layout', 'tray', 'clip', 'proxy', 'cookies',
+                'settings': {k: st[k] for k in ('kind', 'quality', 'vcodec', 'prores', 'aformat', 'theme', 'lang', 'layout', 'tray', 'clip', 'proxy', 'cookies',
                                                 'eq', 'eq_mode', 'eq_points')},
                 'dir': str(out_dir(st)), **self.poll()}
 
@@ -1135,7 +1144,7 @@ class Api:
     def put(self, key, value):
         st = load()
         if key == 'kind' and value in ('video', 'audio') or key == 'quality' and value in QUALITIES \
-                or key == 'cookies' and value in BROWSERS or key == 'vcodec' and value in VCODECS \
+                or key == 'cookies' and value in BROWSERS or key == 'vcodec' and value in VCODECS or key == 'prores' and value in PRORES \
                 or key == 'aformat' and value in ACODECS or key == 'lang' and value in ('ru', 'en'):
             st[key] = value
         elif key == 'layout' and value in SIZES:
@@ -1186,7 +1195,7 @@ class Api:
             SEQ[0] += 1
             known = INFO['title'] if INFO['url'] == url and INFO['status'] == 'ready' else ''   # название уже видно в карточке
             JOBS.insert(0, {'id': SEQ[0], 'url': url, 'kind': kind, 'clip': clip, 'quality': quality, 'title': known,
-                            'af': eq_chain(st), 'vcodec': st['vcodec'], 'aformat': st['aformat'],
+                            'af': eq_chain(st), 'vcodec': st['vcodec'], 'prores': st['prores'], 'aformat': st['aformat'],
                             'status': 'wait', 'stage': '', 'pct': 0, 'speed': None, 'eta': None, 'size': None,
                             'file': '', 'error': '', 'raw': ''})
         WAKE.set()
