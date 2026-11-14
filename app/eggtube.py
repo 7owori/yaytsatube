@@ -16,8 +16,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '4.3.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
-SHOWN = '1.4'
+VERSION = '4.4.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
+SHOWN = '1.5'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
@@ -490,6 +490,31 @@ def ytdlp_version():
         return ''
 
 
+def ytdlp_latest():
+    """Номер последней версии yt-dlp на GitHub; пусто, если узнать не вышло."""
+    tmp = HOME / 'ytdlp.tmp'
+    try:
+        HOME.mkdir(parents=True, exist_ok=True)
+        fetch('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest', tmp, '')
+        m = re.search(r'"tag_name"\s*:\s*"([\w.\-]+)"', tmp.read_text('utf-8', 'replace'))
+        return m.group(1) if m else ''
+    except Exception:
+        return ''
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def ytdlp_old():
+    """Пора ли обновить yt-dlp: вышла версия новее нашей. Не узнали, какая последняя, — судим по возрасту файла."""
+    if not own('yt-dlp.exe'):
+        return False
+    latest = ytdlp_latest()
+    if latest:
+        mine = ytdlp_version()
+        return bool(mine) and mine != latest
+    return time.time() - tool('yt-dlp.exe').stat().st_mtime > FRESH_DAYS * 86400
+
+
 def prepare(force=False, only=None):
     """Докачивает недостающее. yt-dlp обязателен, ffmpeg и deno желательны: без них работа хуже, но не встаёт."""
     with LOCK:
@@ -501,8 +526,7 @@ def prepare(force=False, only=None):
         for t in TOOLS:
             if only and t['id'] not in only:
                 continue
-            old = t['id'] == 'yt-dlp' and own('yt-dlp.exe') and \
-                time.time() - tool('yt-dlp.exe').stat().st_mtime > FRESH_DAYS * 86400
+            old = t['id'] == 'yt-dlp' and not force and not YTDLP and ytdlp_old()
             if YTDLP or (have(t) and not force and not old):
                 continue
             try:
@@ -570,7 +594,8 @@ def build_args(job, st, simple=False):
         '--ignore-config', '--no-playlist', '--newline', '--no-colors', '--encoding', 'utf-8',
         '--windows-filenames', '--no-mtime', '--progress', '--no-simulate',
         '--no-quiet', '--verbose',           # --print включает тихий режим, а в нём не видно ни повторов, ни причин задержки
-        '--socket-timeout', '15', '--retries', '4', '--fragment-retries', '4', '--retry-sleep', '1',
+        '--socket-timeout', '12', '--retries', '4', '--fragment-retries', '4', '--retry-sleep', '1',
+        '--extractor-retries', '1',          # YouTube молчит: не ждать по три раза, а скорее перейти к другому способу соединения
         '--concurrent-fragments', '4',       # если дорожка всё же кусочная, качать по четыре куска разом
         '--paths', str(out_dir(st)), '--output', '%(title).120B [%(id)s]' + clip_name(job.get('clip')) + (' src' if job.get('_cut') else '') + (' EQ' if eq else '') + '.%(ext)s',
         '--print', 'before_dl:JT_ID:%(id)s',
