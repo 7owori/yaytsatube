@@ -16,8 +16,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '4.1.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
-SHOWN = '1.2'
+VERSION = '4.2.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
+SHOWN = '1.3'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
@@ -490,7 +490,7 @@ def ytdlp_version():
         return ''
 
 
-def prepare(force=False):
+def prepare(force=False, only=None):
     """Докачивает недостающее. yt-dlp обязателен, ffmpeg и deno желательны: без них работа хуже, но не встаёт."""
     with LOCK:
         if TOOL['busy']:
@@ -499,6 +499,8 @@ def prepare(force=False):
     errors, ver = [], ''
     try:
         for t in TOOLS:
+            if only and t['id'] not in only:
+                continue
             old = t['id'] == 'yt-dlp' and own('yt-dlp.exe') and \
                 time.time() - tool('yt-dlp.exe').stat().st_mtime > FRESH_DAYS * 86400
             if YTDLP or (have(t) and not force and not old):
@@ -597,7 +599,7 @@ def build_args(job, st, simple=False):
         a += ['--format', 'bv*+ba/b', '--format-sort', ','.join(sort)]
         # под перекодирование качаем в MKV (туда ложится что угодно), в нужный формат файл переложит finish
         a += ['--merge-output-format', 'mkv'] if recode else ['--merge-output-format', box, '--remux-video', box]
-    if job.get('clip'):                     # отрывок: yt-dlp качает только этот кусок; у видео края режутся точно по времени
+    if job.get('clip') and not job.get('_cut'):   # отрывок: yt-dlp качает только этот кусок; у видео края режутся точно по времени
         a += ['--download-sections', '*%s-%s' % (job['clip'][0], job['clip'][1] if job['clip'][1] is not None else 'inf')]
         a += ['--force-keyframes-at-cuts'] if job['kind'] == 'video' else []
     return a + ['--', job['url']]
@@ -608,15 +610,23 @@ def post_plan(job):
     if not have(TOOLS[1]) and not FFMPEG:
         return None
     af = job.get('af') or ''
+    cut = bool(job.get('_cut'))             # файл скачан целиком: отрывок вырезаем этим же проходом
+    src_ext = Path(job['file']).suffix[1:].lower()
     if job['kind'] == 'audio':
-        return {'ext': job.get('aformat') or 'mp3', 'v': ['-vn'], 'a': ACODECS[job.get('aformat') or 'mp3'], 'af': af,
-                'stage': 'Накладываю эквалайзер'} if af else None
+        if af:
+            return {'ext': job.get('aformat') or 'mp3', 'v': ['-vn'], 'a': ACODECS[job.get('aformat') or 'mp3'], 'af': af,
+                    'stage': 'Накладываю эквалайзер'}
+        return {'ext': src_ext, 'v': ['-vn'], 'a': ['-c:a', 'copy'], 'af': '', 'stage': 'Вырезаю отрывок'} if cut else None
     key = job.get('vcodec') or 'h264'
     recode = VCODECS[key][2]
-    src_ext = Path(job['file']).suffix[1:].lower()
     if not recode:
-        if not af:
+        if not af and not cut:
             return None
+        if cut:                             # при копировании картинки отрывок начался бы с ближайшего опорного кадра, а не с нужной секунды
+            h264 = src_ext == 'mp4' and re.search(r'^(avc|h264)', job.get('vc') or '', re.I)
+            return {'ext': src_ext, 'v': ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p'] if h264 else ['-c:v', 'copy'],
+                    'af': af, 'stage': 'Вырезаю отрывок',
+                    'a': (['-c:a', 'libopus', '-b:a', '160k'] if src_ext == 'webm' else ['-c:a', 'aac', '-b:a', '192k']) if af else ['-c:a', 'copy']}
         return {'ext': src_ext, 'v': ['-c:v', 'copy'], 'af': af, 'stage': 'Накладываю эквалайзер',
                 'a': ['-c:a', 'libopus', '-b:a', '160k'] if src_ext == 'webm' else ['-c:a', 'aac', '-b:a', '192k']}
     ready = bool(re.search(VCODEC_HAVE[key], job.get('vc') or '', re.I))     # сайт сам дал нужный кодек: картинку не трогаем
@@ -635,7 +645,9 @@ def finish(job, plan):
     ext = plan['ext']
     tmp, final = src.with_name(src.stem + '.eqtmp.' + ext), src.with_suffix('.' + ext)
     maps = [] if job['kind'] == 'audio' else ['-map', '0:v:0', '-map', '0:a:0?']
-    cmd = [FFMPEG or tool_path('ffmpeg.exe'), '-y', '-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1',
+    clip = job.get('clip') if job.get('_cut') else None
+    cut = (['-ss', str(clip[0])] + (['-to', str(clip[1])] if clip[1] is not None else [])) if clip else []
+    cmd = [FFMPEG or tool_path('ffmpeg.exe'), '-y', '-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1'] + cut + [
            '-i', str(src)] + maps + plan['v'] + plan['a'] + (['-af', plan['af']] if plan['af'] else []) + \
         (['-movflags', '+faststart'] if ext in ('mp4', 'mov') else []) + [str(tmp)]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -645,6 +657,8 @@ def finish(job, plan):
         if job['status'] == 'cancel':
             kill(proc)
     out, dur = [], num(job.get('dur'))
+    if clip and dur:
+        dur = max(1, (clip[1] if clip[1] is not None else dur) - clip[0])
     for line in proc.stdout:
         line = line.strip()
         m = re.match(r'out_time_(?:us|ms)=(\d+)', line)      # оба поля ffmpeg отдаёт в микросекундах
@@ -665,6 +679,22 @@ def finish(job, plan):
 
 
 ATTEMPTS = len(NET_MODES)
+# ошибки, которые лечит свежий yt-dlp (YouTube что-то поменял) или недостающий ffmpeg
+STALE = (r'http error 403|forbidden|unable to extract|nsig|signature|player response|requested format is not available|'
+         r'no video formats|ffmpeg.{0,40}not (found|installed)|install ffmpeg|update yt-dlp|latest version')
+
+
+def renew(text):
+    """Сама обновляет то, чего не хватило загрузке: недостающий ffmpeg или устаревший yt-dlp. True — что-то изменилось."""
+    if YTDLP:
+        return False
+    before = (ytdlp_version(), have(TOOLS[1]))
+    old = own('yt-dlp.exe') and time.time() - tool('yt-dlp.exe').stat().st_mtime > 12 * 3600
+    if not have(TOOLS[1]):
+        prepare(False, ('ffmpeg',))
+    if old and not re.search(r'ffmpeg.{0,40}not (found|installed)|install ffmpeg', text):
+        prepare(True, ('yt-dlp',))
+    return (ytdlp_version(), have(TOOLS[1])) != before
 NET_ERRORS = (r'http error (403|429|5\d\d)|bytes read|more expected|incomplete|timed out|timeout|'
               r'connection (reset|aborted)|remote end closed|10054|10060|giving up after|ssl|record layer|impersonat')
 HINTS = (
@@ -684,7 +714,8 @@ HINTS = (
      'или с ограничением.'),
     (r'unsupported url|is not a valid url', 'Не похоже на ссылку на видео.'),
     (r'drm', 'Видео защищено DRM, скачать нельзя.'),
-    (r'ffmpeg|ffprobe', 'Не хватает ffmpeg. В настройках нажми «Обновить компоненты».'),
+    (r'ffmpeg exited|server returned 5|5xx|http error 5\d\d', 'YouTube не отдал файл: ошибка на его стороне. Нажми «Повторить» чуть позже.'),
+    (r'ffmpeg.{0,40}not (found|installed)|ffprobe.{0,40}not (found|installed)|install ffmpeg', 'Не хватает ffmpeg, а скачать его не получилось. Проверь интернет и нажми «Повторить».'),
     (r'no space|errno 28', 'На диске кончилось место.'),
 )
 
@@ -791,26 +822,38 @@ def run_job(job):
     st = load()
     try:
         out_dir(st).mkdir(parents=True, exist_ok=True)
-        modes = sorted(NET_MODES, key=lambda m: m != st['net_mode'])      # начать с того способа, что сработал в прошлый раз
-        for attempt in range(1, ATTEMPTS + 1):
-            st = dict(st, net_mode=modes[attempt - 1])
-            code, err, tail = run_once(job, st, False)
-            job['_log'] = job.get('_log', []) + [f'=== попытка {attempt}, способ: {st["net_mode"] or "обычный"} ===', *tail]
-            if not code and job['status'] != 'cancel' and load()['net_mode'] != st['net_mode']:
-                keep = load()
-                keep['net_mode'] = st['net_mode']
-                save(keep)
-            flaky = re.search(NET_ERRORS, (err + ' ' + ' '.join(x for x in tail[-12:] if 'Got error' in x or 'Giving up' in x)).lower())
-            if not code or job['status'] == 'cancel' or attempt == ATTEMPTS or not flaky:
-                break
-            # обрыв или отказ на середине: новый заход берёт свежие ссылки и продолжает с того же места (кусок .part цел)
-            job.update(stage=f'Связь оборвалась, пробую другим способом ({attempt + 1} из {ATTEMPTS})', got=0)
-            for _ in range(40):
+        def attempts(st):
+            modes = sorted(NET_MODES, key=lambda m: m != st['net_mode'])      # начать с того способа, что сработал в прошлый раз
+            for attempt in range(1, ATTEMPTS + 1):
+                st = dict(st, net_mode=modes[attempt - 1])
+                code, err, tail = run_once(job, st, False)
+                job['_log'] = job.get('_log', []) + [f'=== попытка {attempt}, способ: {st["net_mode"] or "обычный"} ===', *tail]
+                if not code and job['status'] != 'cancel' and load()['net_mode'] != st['net_mode']:
+                    keep = load()
+                    keep['net_mode'] = st['net_mode']
+                    save(keep)
+                flaky = re.search(NET_ERRORS, (err + ' ' + ' '.join(x for x in tail[-12:] if 'Got error' in x or 'Giving up' in x)).lower())
+                if not code or job['status'] == 'cancel' or attempt == ATTEMPTS or not flaky:
+                    break
+                # обрыв или отказ на середине: новый заход берёт свежие ссылки и продолжает с того же места (кусок .part цел)
+                job.update(stage=f'Связь оборвалась, пробую другим способом ({attempt + 1} из {ATTEMPTS})', got=0)
+                for _ in range(40):
+                    if job['status'] == 'cancel':
+                        break
+                    time.sleep(.1)
                 if job['status'] == 'cancel':
                     break
-                time.sleep(.1)
-            if job['status'] == 'cancel':
-                break
+            return code, err, tail, st
+
+        code, err, tail, st = attempts(st)
+        text = lambda: (err + ' ' + ' '.join(tail[-40:])).lower()
+        if code and job['status'] != 'cancel' and job.get('clip'):
+            # отрывки yt-dlp качает через ffmpeg, а ему YouTube часто отказывает (503). Тогда качаем целиком и вырезаем сами
+            job.update(pct=0, got=0, stage='Отрывок не отдали: качаю целиком и вырежу сам', _cut=True)
+            code, err, tail, st = attempts(st)
+        if code and job['status'] != 'cancel' and not job.get('_renewed') and re.search(STALE, text()) and renew(text()):
+            job.update(pct=0, got=0, stage='Компоненты обновлены, пробую снова', _renewed=True)
+            code, err, tail, st = attempts(st)
         if code and job['status'] != 'cancel' and re.search(r'format|sort|merg|remux|conver|codec|postprocess', (err or ' '.join(tail)).lower()):
             job.update(pct=0, stage='Пробую проще')
             code, err, tail = run_once(job, st, True)
