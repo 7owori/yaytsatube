@@ -65,6 +65,7 @@ main{height:100vh}
 /* установка обновления: экран с прыгающим яйцом, пока программа качает новый код и перезапускается */
 #updOver{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:var(--bg);animation:fade .35s ease-out}
 #updOver[hidden]{display:none}
+#updOver.out{opacity:0;transform:scale(1.03);transition:opacity .5s ease,transform .5s ease;pointer-events:none}
 #updOver svg{width:84px;height:106px;margin-bottom:14px;transform-origin:50% 100%;animation:jump 1.15s infinite}
 #updOver b{font:600 22px var(--sans);color:var(--title);animation:rise .5s .1s backwards cubic-bezier(.2,.7,.3,1)}
 #updOver span{font-size:14px;color:var(--muted);animation:rise .5s .22s backwards cubic-bezier(.2,.7,.3,1)}
@@ -118,6 +119,17 @@ section{display:flex;flex-direction:column;width:100%;max-width:880px;height:100
   94%{transform:scale(1.05,.96)}
   100%{transform:none}}
 .pageicon.jump svg{animation:jump .85s both}
+/* сальто: присело, взлетело с оборотом через голову, приземлилось и спружинило */
+@keyframes flip{
+  0%{transform:none;animation-timing-function:cubic-bezier(.3,0,.7,1)}
+  12%{transform:translateY(7px) scale(1.22,.76);animation-timing-function:cubic-bezier(.2,.8,.4,1)}
+  30%{transform:translateY(-24px) rotate(70deg) scale(.88,1.16)}
+  50%{transform:translateY(-36px) rotate(190deg) scale(1,1)}
+  70%{transform:translateY(-18px) rotate(320deg) scale(.9,1.14);animation-timing-function:cubic-bezier(.6,0,1,.7)}
+  80%{transform:translateY(9px) rotate(360deg) scale(1.3,.68);animation-timing-function:cubic-bezier(.2,.7,.4,1)}
+  90%{transform:translateY(-3px) rotate(360deg) scale(.94,1.07)}
+  100%{transform:rotate(360deg)}}
+.pageicon.flip svg{transform-origin:50% 50%;animation:flip 1.05s both}
 h2{font:700 36px/1.2 var(--sans);letter-spacing:-.015em;color:var(--title)}
 .sub{min-height:22px;margin-top:6px;font-size:15px;line-height:1.45;color:var(--muted)}
 .body{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;margin:18px -12px 0;padding:0 12px}
@@ -480,7 +492,7 @@ const EN = {
   'сжатие без потерь, файл большой': 'lossless compression, large file', 'без сжатия, самый большой': 'uncompressed, the largest',
   'Изменения не применены': 'Changes not applied', 'Применён к следующим загрузкам': 'Applied to the next downloads',
   'Двойной щелчок — поставить точку': 'Double-click to add a point', 'к': 'k',
-  'Ищу видео': 'Looking up the video', 'Качаю отрывок': 'Fetching a clip', 'Готовлю звук': 'Preparing audio', 'Отменить загрузку отрывка': 'Cancel clip download',
+  'Собираю данные': 'Gathering data', 'Качаю отрывок': 'Fetching a clip', 'Готовлю звук': 'Preparing audio', 'Отменить загрузку отрывка': 'Cancel clip download',
   'Остановить': 'Stop', 'Отрывок': 'Clip', 'Послушать полминуты с этими настройками': 'Listen to half a minute with these settings',
   'Сначала вставь ссылку на видео': 'Paste a video link first', 'Не получилось скачать отрывок': 'Could not fetch the clip', 'Не получилось скачать отрывок.': 'Could not fetch the clip.',
   'Не получилось проиграть отрывок': 'Could not play the clip', 'Сначала нажми «Применить» или «Сбросить»': 'Press Apply or Reset first',
@@ -517,7 +529,7 @@ const EN_PARTS = [
   [/Не удалось скачать компоненты \(/, 'Could not fetch components ('], [/\)\. Проверь интернет и нажми «Обновить» в настройках\./, '). Check your connection and press Update in Settings.'],
   [/Первый запуск, докачиваю компоненты: /, 'First run, fetching components: '], [/Докачиваю компоненты: /, 'Fetching components: '], [/Обновляю компоненты: /, 'Updating components: '],
   [/Подключаюсь к серверу с видео/, 'Connecting to the video server'], [/Накладываю эквалайзер/, 'Applying the equalizer'], [/Перекодирую в /, 'Converting to '], [/Перекладываю в /, 'Repacking into '],
-  [/Собираю файл/, 'Assembling the file'], [/Пробую проще/, 'Trying a simpler way'], [/Ищу видео/, 'Looking up the video'],
+  [/Собираю файл/, 'Assembling the file'], [/Пробую проще/, 'Trying a simpler way'], [/Собираю данные/, 'Gathering data'], [/Подключаюсь другим способом/, 'Connecting another way'], [/Качаю целиком, чтобы вырезать отрывок/, 'Downloading the whole file to cut the clip'],
   [/Больше (\d+) точек не поместится/, 'No room for more than $1 points'], [/ · в очереди ещё /, ' · queued: '], [/В очереди: /, 'Queued: '],
   [/осталось (\S+)/, '$1 left'], [/Эквалайзер: /, 'Equalizer: '], [/не применён/, 'not applied'], [/выключен/, 'off'], [/включён/, 'on'],
   [/Качество: /, 'Quality: '], [/Максимум/, 'Maximum'], [/Кодек: /, 'Codec: '], [/: распаковка/, ': unpacking'], [/качаю /, 'fetching '], [/нет: /, 'missing: '],
@@ -584,13 +596,18 @@ function el(tag, cls, text) {
   if (text != null) e.textContent = text;
   return e;
 }
+let hovers = 0;
 function egg(move) {     // яйцо в шапке раздела (или в лого, если шапка спрятана) качается или подпрыгивает
   const e = $('bigEgg');
-  e.classList.remove('knock', 'hop', 'jump'); void e.offsetWidth; e.classList.add(move);
+  e.classList.remove('knock', 'hop', 'jump', 'flip'); void e.offsetWidth; e.classList.add(move);
 }
 document.querySelectorAll('.pageicon').forEach(p => {     // прыжок доигрывает до конца, даже если мышь уже ушла
-  p.addEventListener('mouseenter', () => { if (!document.body.classList.contains('boot')) p.classList.add('jump'); });
-  p.addEventListener('animationend', e => { if (e.animationName == 'jump') p.classList.remove('jump'); });
+  p.addEventListener('mouseenter', () => {
+    if (document.body.classList.contains('boot') || p.classList.contains('jump') || p.classList.contains('flip')) return;
+    p.classList.remove('knock', 'hop'); void p.offsetWidth;          // класс прошлой анимации перебивал прыжок
+    p.classList.add(++hovers % 5 ? 'jump' : 'flip');                 // каждое пятое наведение — сальто
+  });
+  p.addEventListener('animationend', e => p.classList.remove(e.animationName));
 });
 function say(id, text, bad) {
   const e = $(id);
@@ -973,7 +990,7 @@ function audioSync() {
 }
 const ICON = { play: '<path d="M4 2.6L11.4 7L4 11.4Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>',
   stop: '<rect x="3" y="3" width="8" height="8" rx="1.6" fill="currentColor"/>' };
-const STAGE = { find: [12, 'Ищу видео'], load: [45, 'Качаю отрывок'], convert: [82, 'Готовлю звук'] };
+const STAGE = { find: [12, 'Собираю данные'], load: [45, 'Качаю отрывок'], convert: [82, 'Готовлю звук'] };
 let pStart = 0, pRaf = 0, pFill = 0, pSec = -1;
 function prevShow(text, bad) {
   const b = $('prevBtn'), box = $('prevText'), have = !!abuf && (!$('url').value.trim() || $('url').value.trim() == prevUrl);
@@ -1212,6 +1229,7 @@ async function add() {
   const r = await api().add($('url').value, S.settings.kind, S.settings.quality, clip);
   if (r.error) return say('addResult', r.error, true);
   $('url').value = ''; autoFilled = false; say('addResult', ''); cardLook(true);
+  if (!$('eq').hidden) eqOpen(false);        // загрузка пошла: окно эквалайзера больше не нужно
   if (clip) { clip = null; clipText(); }          // отрывок относился к этой ссылке
   refresh();
 }
@@ -1268,7 +1286,7 @@ function jobText(j) {
   if (j.status == 'cancel') return 'Отменено';
   if (j.status == 'error') return j.error;
   if (j.status == 'done') return 'Готово' + (j.size ? ' · ' + human(j.size) : '');
-  const p = [j.stage || 'Ищу видео'];
+  const p = [j.stage || 'Собираю данные'];
   if (/^Перекодирую/.test(j.stage)) p.push(num(j.pct, 0) + '%');
   if (j.stage == 'Качаю') {
     p.push(num(j.pct, 0) + '%');
@@ -1322,7 +1340,7 @@ function renderJobs(jobs) {
   $('bigEgg').classList.toggle('live', !!run);
   if (run && run.id != runId) egg('jump');
   runId = run ? run.id : 0;
-  $('tLoad').textContent = run ? (run.stage == 'Качаю' || /^Перекодирую/.test(run.stage) ? run.stage + ' · ' + num(run.pct, 0) + '%' : run.stage || 'Ищу видео')
+  $('tLoad').textContent = run ? (run.stage == 'Качаю' || /^Перекодирую/.test(run.stage) ? run.stage + ' · ' + num(run.pct, 0) + '%' : run.stage || 'Собираю данные')
     + (live.length > 1 ? ' · в очереди ещё ' + (live.length - 1) : '') : live.length ? 'В очереди: ' + live.length : 'Вставь ссылку на видео с YouTube или другого сайта.';
   $('tLoad').classList.toggle('live', !!live.length);
 }
@@ -1331,11 +1349,19 @@ function renderJobs(jobs) {
 const TOOL_NAMES = { 'yt-dlp': 'yt-dlp', ffmpeg: 'ffmpeg', deno: 'deno' };
 /* экран с прыгающим яйцом: обновление самой программы или её компонентов */
 const over = {app: '', tools: '', sub: '', part: -1, hide: false};      // hide: человек нажал «Скрыть», компоненты качаются дальше в фоне
+let overSince = 0, overTimer = 0;
 function overShow() {
-  const on = over.app || (over.tools && !over.hide);
+  const on = !!(over.app || (over.tools && !over.hide)), box = $('updOver');
+  if (!on) {                                // работа кончилась: экран не пропадает рывком, а плавно растворяется
+    if (box.hidden || box.classList.contains('out')) return;
+    const wait = over.hide ? 0 : Math.max(0, 900 - (Date.now() - overSince));      // и не мелькает, если всё заняло полсекунды
+    clearTimeout(overTimer);
+    overTimer = setTimeout(() => { box.classList.add('out'); overTimer = setTimeout(() => { box.hidden = true; box.classList.remove('out'); }, 520); }, wait);
+    return;
+  }
+  clearTimeout(overTimer); box.classList.remove('out');
+  if (box.hidden) { overSince = Date.now(); box.hidden = false; }
   $('updOverHide').hidden = !!over.app;
-  $('updOver').hidden = !on;
-  if (!on) return;
   $('updOverText').textContent = over.app || over.tools;
   $('updOverSub').textContent = over.app ? 'Программа перезапустится сама' : over.sub;
   const known = !over.app && over.part >= 0;
