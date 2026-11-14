@@ -16,8 +16,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '4.2.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
-SHOWN = '1.3'
+VERSION = '4.3.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
+SHOWN = '1.4'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
@@ -572,7 +572,7 @@ def build_args(job, st, simple=False):
         '--no-quiet', '--verbose',           # --print включает тихий режим, а в нём не видно ни повторов, ни причин задержки
         '--socket-timeout', '15', '--retries', '4', '--fragment-retries', '4', '--retry-sleep', '1',
         '--concurrent-fragments', '4',       # если дорожка всё же кусочная, качать по четыре куска разом
-        '--paths', str(out_dir(st)), '--output', '%(title).120B [%(id)s]' + clip_name(job.get('clip')) + (' EQ' if eq else '') + '.%(ext)s',
+        '--paths', str(out_dir(st)), '--output', '%(title).120B [%(id)s]' + clip_name(job.get('clip')) + (' src' if job.get('_cut') else '') + (' EQ' if eq else '') + '.%(ext)s',
         '--print', 'before_dl:JT_ID:%(id)s',
         '--print', 'before_dl:JT_TITLE:%(title)j',
         '--print', 'after_move:JT_FILE:%(filepath)j',
@@ -603,6 +603,19 @@ def build_args(job, st, simple=False):
         a += ['--download-sections', '*%s-%s' % (job['clip'][0], job['clip'][1] if job['clip'][1] is not None else 'inf')]
         a += ['--force-keyframes-at-cuts'] if job['kind'] == 'video' else []
     return a + ['--', job['url']]
+
+
+def has_video(path):
+    """Есть ли в файле картинка. Не смогли проверить — считаем, что есть."""
+    for probe in dict.fromkeys(x for x in (tool_path('ffprobe.exe'), shutil.which('ffprobe')) if x):
+        try:
+            r = subprocess.run([probe, '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', str(path)],
+                               capture_output=True, stdin=subprocess.DEVNULL, creationflags=NOWIN, timeout=60, encoding='utf-8', errors='replace')
+        except Exception:
+            continue                        # этот ffprobe не запустился: пробуем следующий
+        if r.returncode == 0:
+            return 'video' in r.stdout
+    return True
 
 
 def post_plan(job):
@@ -643,7 +656,8 @@ def finish(job, plan):
     У обычного видео с эквалайзером картинка копируется как есть, пережимается только звук."""
     src = Path(job['file'])
     ext = plan['ext']
-    tmp, final = src.with_name(src.stem + '.eqtmp.' + ext), src.with_suffix('.' + ext)
+    stem = ''.join(src.stem.rsplit(' src', 1)) if job.get('_cut') else src.stem      # « src» — пометка целого файла, из которого режем
+    tmp, final = src.with_name(stem + '.eqtmp.' + ext), src.with_name(stem + '.' + ext)
     maps = [] if job['kind'] == 'audio' else ['-map', '0:v:0', '-map', '0:a:0?']
     clip = job.get('clip') if job.get('_cut') else None
     cut = (['-ss', str(clip[0])] + (['-to', str(clip[1])] if clip[1] is not None else [])) if clip else []
@@ -714,6 +728,7 @@ HINTS = (
      'или с ограничением.'),
     (r'unsupported url|is not a valid url', 'Не похоже на ссылку на видео.'),
     (r'drm', 'Видео защищено DRM, скачать нельзя.'),
+    (r'нет видеодорожки', 'YouTube отдал файл без картинки. Нажми «Повторить»; если повторится, выбери качество пониже.'),
     (r'ffmpeg exited|server returned 5|5xx|http error 5\d\d', 'YouTube не отдал файл: ошибка на его стороне. Нажми «Повторить» чуть позже.'),
     (r'ffmpeg.{0,40}not (found|installed)|ffprobe.{0,40}not (found|installed)|install ffmpeg', 'Не хватает ffmpeg, а скачать его не получилось. Проверь интернет и нажми «Повторить».'),
     (r'no space|errno 28', 'На диске кончилось место.'),
@@ -847,10 +862,18 @@ def run_job(job):
 
         code, err, tail, st = attempts(st)
         text = lambda: (err + ' ' + ' '.join(tail[-40:])).lower()
-        if code and job['status'] != 'cancel' and job.get('clip'):
-            # отрывки yt-dlp качает через ffmpeg, а ему YouTube часто отказывает (503). Тогда качаем целиком и вырезаем сами
-            job.update(pct=0, got=0, stage='Отрывок не отдали: качаю целиком и вырежу сам', _cut=True)
+        blind = lambda: (not code and job['kind'] == 'video' and job.get('file') and os.path.isfile(job['file'])
+                         and not has_video(job['file']))               # видео скачалось без картинки
+        if (code or blind()) and job['status'] != 'cancel' and job.get('clip') and not job.get('_cut'):
+            # отрывки yt-dlp качает через ffmpeg, а ему YouTube часто отказывает (503) или отдаёт один звук.
+            # Тогда качаем целиком и вырезаем сами
+            if job.get('file'):
+                Path(job['file']).unlink(missing_ok=True)
+            sweep(out_dir(st), job.get('vid'))
+            job.update(pct=0, got=0, file='', stage='Отрывок не отдали: качаю целиком и вырежу сам', _cut=True)
             code, err, tail, st = attempts(st)
+        if blind():
+            code, err = 1, 'в скачанном файле нет видеодорожки'
         if code and job['status'] != 'cancel' and not job.get('_renewed') and re.search(STALE, text()) and renew(text()):
             job.update(pct=0, got=0, stage='Компоненты обновлены, пробую снова', _renewed=True)
             code, err, tail, st = attempts(st)
@@ -884,11 +907,7 @@ def run_job(job):
             raw = err or (plain[-1] if plain else f'yt-dlp завершился с кодом {code}')
             job.update(status='error', stage='', error=explain(raw), raw=raw[:400])
             try:                            # журнал неудачи сохраняется сам: по нему видно, какие способы пробовались
-                LOG.write_text('\n'.join([job['url'], *job.get('_log', tail)]), 'utf-8')
-            except OSError:
-                pass
-            try:
-                LOG.write_text('\n'.join([job['url'], *tail]), 'utf-8')
+                LOG.write_text('\n'.join([job['url'], *job.get('_log', []), '=== итог ===', *tail]), 'utf-8')
             except OSError:
                 pass
 
