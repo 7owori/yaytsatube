@@ -430,6 +430,7 @@ body.boot .corner{animation:fade .6s ease-out .55s backwards}
     <div class="row"><span>Ссылка из буфера</span><button class="toggle" id="clipBtn" onclick="toggleClip()"><i class="sq" id="clipSq"></i><span>подставлять, когда открываю окно</span></button><span></span></div>
     <div class="row"><span>При закрытии</span><button class="toggle" id="trayBtn" onclick="toggleTray()"><i class="sq" id="traySq"></i><span>сворачивать в трей и качать дальше</span></button><span></span></div>
     <div class="row"><span>Прокси</span><input id="proxy" type="text" spellcheck="false" autocomplete="off" placeholder="не используется" aria-label="Прокси"><span class="result" id="proxyResult" aria-live="polite"></span></div>
+    <div class="row" id="loginRow" hidden><span>Вход в YouTube</span><span class="tag" id="vLogin"></span><button class="link" onclick="loginOff()">Отключить</button></div>
     <div class="row"><span>Версия</span><span class="tag" id="vVer"></span><button class="link" id="updBtn" onclick="updClick()">Проверить обновления</button></div>
     <p class="hint bad" id="updErr" hidden><span>Обновление не скачалось. Проверь интернет; если GitHub у тебя не открывается, укажи прокси выше.</span><br><span class="raw" id="updErrText"></span></p>
     <div class="row"><span>Компоненты</span><span class="tag" id="vTools">—</span><button class="link" id="toolsBtn" onclick="toolsUpdate()">Обновить</button></div>
@@ -510,7 +511,8 @@ const EN = {
   'Пока ничего не скачано': 'Nothing downloaded yet', 'в папке': 'in folder', 'Сохранено': 'Saved',
   'Накладываю эквалайзер': 'Applying the equalizer', 'Собираю файл': 'Assembling the file', 'Подключаюсь к серверу с видео': 'Connecting to the video server',
   'Пробую проще': 'Trying a simpler way', 'Качаю': 'Downloading',
-  'YouTube просит подтвердить, что ты не бот. Попробуй позже или включи VPN либо прокси.': 'YouTube wants proof that you are not a bot. Try later, or turn on a VPN or proxy.',
+  'YouTube просит подтвердить, что ты не бот. Выключи VPN, если он включён, или войди через браузер.': 'YouTube wants proof that you are not a bot. Turn off your VPN if it is on, or sign in through your browser.',
+  'Войти через браузер': 'Sign in through a browser', 'надёжнее всего': 'most reliable', 'если не выйдет, закрой браузер и повтори': 'if it fails, close the browser and retry', 'Вход в YouTube': 'YouTube sign-in', 'Отключить': 'Turn off',
   'Соединение с YouTube обрывается на середине файла. Нажми «Повторить»: загрузка продолжится с того же места. Если обрывается раз за разом, попробуй качество пониже или VPN.':
     'The connection to YouTube drops mid-file. Press Retry: the download resumes where it stopped. If it keeps dropping, try a lower quality or a VPN.',
   'YouTube не отвечает или рвёт соединение. Если он у тебя замедлен, включи VPN на весь компьютер или укажи прокси в настройках.':
@@ -529,7 +531,9 @@ const EN = {
 };
 /* составные строки (с числами и названиями) переводятся по кускам, длинные куски раньше коротких */
 const EN_PARTS = [
-  [/Обновить до /, 'Update to '], [/Отрывок: /, 'Clip: '], [/: весь$/, ': whole'], [/–конец$/, '–end'], [/Обновляю до /, 'Updating to '], [/^Обновляю компоненты$/, 'Updating components'], [/^Докачиваю компоненты$/, 'Downloading the missing components'], [/^Скачиваю компоненты$/, 'Downloading components'], [/ из /, ' of '], [/Обновлено до /, 'Updated to '], [/последняя версия/, 'latest version'],
+  [/Обновить до /, 'Update to '], [/^Повторил, ответ тот же\. /, 'Retried, same answer. '], [/^через /, 'via '], [/YouTube проверяет, не бот ли я: захожу иначе/, 'YouTube is checking for bots: trying another way in'], [/Вход из браузера не прочитался, пробую без него/, 'Could not read the browser sign-in, trying without it'],
+  [/Не получилось взять вход из (\w+): закрой этот браузер и нажми «Повторить» или выбери другой\. Надёжнее всего Firefox\./, 'Could not take the sign-in from $1: close that browser and press Retry, or pick another. Firefox is the most reliable.'],
+  [/YouTube не принял вход из (\w+)\. Открой в нём YouTube, войди в аккаунт и нажми «Повторить», или выбери другой браузер\./, 'YouTube did not accept the sign-in from $1. Open YouTube there, sign in, then press Retry, or pick another browser.'], [/Отрывок: /, 'Clip: '], [/: весь$/, ': whole'], [/–конец$/, '–end'], [/Обновляю до /, 'Updating to '], [/^Обновляю компоненты$/, 'Updating components'], [/^Докачиваю компоненты$/, 'Downloading the missing components'], [/^Скачиваю компоненты$/, 'Downloading components'], [/ из /, ' of '], [/Обновлено до /, 'Updated to '], [/последняя версия/, 'latest version'],
   [/Связь рвётся, попытка (\d+) из (\d+)/, 'Connection keeps dropping, try $1 of $2'], [/Связь оборвалась, захожу заново \((\d+) из (\d+)\)/, 'Connection lost, starting over ($1 of $2)'], [/Связь оборвалась, пробую другим способом \((\d+) из (\d+)\)/, 'Connection lost, trying another way ($1 of $2)'], [/Отрывок не отдали: качаю целиком и вырежу сам/, 'Clip refused: downloading the whole file to cut it here'], [/Вырезаю отрывок/, 'Cutting the clip'], [/Компоненты обновлены, пробую снова/, 'Components updated, trying again'],
   [/Не удалось скачать компоненты \(/, 'Could not fetch components ('], [/\)\. Проверь интернет и нажми «Обновить» в настройках\./, '). Check your connection and press Update in Settings.'],
   [/Первый запуск, докачиваю компоненты: /, 'First run, fetching components: '], [/Докачиваю компоненты: /, 'Fetching components: '], [/Обновляю компоненты: /, 'Updating components: '],
@@ -740,6 +744,7 @@ function clipApply() {
   if (bad) { $('clipErr').textContent = bad; $('clipErr').hidden = false; return; }
   clipSet(!a && b == null ? null : [a || 0, b != null && infoDur && b > infoDur ? null : b]);
 }
+document.addEventListener('pointerdown', e => { if (!$('menu').hidden && ($('menu').dataset.key || '').startsWith('login') && !e.target.closest('#menu, .jt .link')) menuClose(); });
 document.addEventListener('pointerdown', e => { if (!$('clipBox').hidden && !e.target.closest('#clipBox, #clipBtn')) clipClose(); });
 document.addEventListener('keydown', e => {
   if ($('clipBox').hidden) return;
@@ -1315,6 +1320,7 @@ function jobRow(j) {
   top.append(nm);
   const show = btn('Показать в папке', () => call('reveal', r.job.file));
   const open = btn('Открыть', () => call('open_file', r.job.file));
+  const signin = btn('Войти через браузер', () => loginMenu(signin, r.job.id)); signin.classList.add('new');
   const again = btn('Повторить', () => api().retry(r.job.id).then(refresh));
   const log = btn('Журнал', () => api().open_log(r.job.id));
   const stop = btn('Отменить', () => api().cancel(r.job.id).then(refresh));
@@ -1332,12 +1338,37 @@ function jobRow(j) {
     const live = j.status == 'wait' || j.status == 'run';
     show.hidden = open.hidden = j.status != 'done';
     again.hidden = j.status != 'error' && j.status != 'cancel';
+    signin.hidden = !(j.status == 'error' && j.ask == 'login');
     log.hidden = j.status != 'error' && j.status != 'run';
     stop.hidden = !live; hide.hidden = live;
   };
   r.update(j);
   return r;
 }
+/* YouTube потребовал подтвердить, что человек не бот: по кнопке на строке программа берёт вход из выбранного браузера */
+const BROWSERS = [['firefox', 'Firefox', 'надёжнее всего'], ['edge', 'Edge', 'если не выйдет, закрой браузер и повтори'], ['chrome', 'Chrome', 'если не выйдет, закрой браузер и повтори']];
+function loginMenu(btn, id) {
+  const box = $('menu'), was = !box.hidden && box.dataset.key == 'login' + id;
+  menuClose();
+  if (was) return;
+  box.textContent = ''; box.dataset.key = 'login' + id;
+  for (const [v, name, hint] of BROWSERS) {
+    const b = el('button'); b.setAttribute('role', 'menuitem');
+    b.append(el('i', 'sq' + (v == S.settings.login ? ' red' : '')), el('span', '', name), el('small', '', hint));
+    b.onclick = async () => { menuClose(); const r = await api().login(id, v); if (r.ok) { S.settings.login = r.login; loginShow(); } refresh(); };
+    box.append(b);
+  }
+  const r = btn.getBoundingClientRect();
+  box.hidden = false;
+  box.style.left = Math.max(8, Math.min(r.left, innerWidth - box.offsetWidth - 8)) + 'px';
+  box.style.top = Math.max(8, r.bottom + 4 + box.offsetHeight > innerHeight ? r.top - 4 - box.offsetHeight : r.bottom + 4) + 'px';
+  box.querySelector('button').focus();
+}
+function loginShow() {
+  const b = BROWSERS.find(x => x[0] == S.settings.login);
+  $('loginRow').hidden = !b; $('vLogin').textContent = b ? 'через ' + b[1] : '';
+}
+async function loginOff() { S.settings.login = ''; await api().put('login', ''); loginShow(); }
 function renderJobs(jobs) {
   const box = $('jobs'), seen = new Set();
   jobs.forEach((j, i) => {
@@ -1522,7 +1553,7 @@ async function start() {
   $('clipSq').classList.toggle('on', S.settings.clip); $('traySq').classList.toggle('on', S.settings.tray);
   $('proxy').value = S.settings.proxy;
   showDir(S.dir);
-  renderJobs(S.jobs); renderTools(S.tools); renderHist(S.history); renderUpdate(S.update);
+  renderJobs(S.jobs); renderTools(S.tools); renderHist(S.history); renderUpdate(S.update); loginShow();
   setInterval(refresh, 600);
   document.body.classList.add('ready', 'boot'); setTimeout(() => document.body.classList.remove('boot'), 1600);
   $('url').focus();
