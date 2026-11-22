@@ -16,8 +16,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-VERSION = '4.8.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
-SHOWN = '3.2'
+VERSION = '4.9.0'     # служебный номер для обновления: только растёт. Людям показывается SHOWN
+SHOWN = '3.3'
 TITLE = 'Яйцатюб'
 WIN = os.name == 'nt'
 FROZEN = getattr(sys, 'frozen', False)
@@ -47,6 +47,7 @@ TOOLS = (
 FRESH_DAYS = 5        # yt-dlp старше этого перекачивается сам: YouTube часто ломает старые версии
 QUALITIES = ('max', '2160', '1440', '1080', '720', '480')
 BROWSERS = ('', 'firefox', 'chrome', 'edge')
+BROWSER_NAMES = {'firefox': 'Firefox', 'chrome': 'Chrome', 'edge': 'Edge'}      # откуда можно взять вход в YouTube
 # кодек видео -> (что предпочесть при выборе дорожек, формат файла, чем перекодировать, если сайт такого не дал)
 VCODECS = {
     'h264': ('vcodec:h264,acodec:m4a', 'mp4', None),
@@ -75,7 +76,7 @@ PT_MAX, PT_GAIN, PT_F, PT_Q = 12, 18, (20, 20000), (0.3, 8)
 PT_SOFT = 1.5        # полкам узкая добротность не нужна: даёт горб рядом с частотой
 CUT_FLAT, CUT_Q, CUT_STEPS = 0.71, (0.5, 3.0), 4   # срез: ровный склон при 0.71; крутизна 12, 24, 36 или 48 дБ/окт
 FS = 48000
-DEFAULTS = {'dir': '', 'kind': 'video', 'quality': '1080', 'vcodec': 'h264', 'aformat': 'mp3', 'theme': 'dark', 'lang': 'ru', 'layout': 'wide', 'size': None, 'tray': True, 'tray_told': False, 'seen': '', 'net_mode': '', 'prores': '422', 'clip': True, 'proxy': '', 'cookies': '',
+DEFAULTS = {'dir': '', 'kind': 'video', 'quality': '1080', 'vcodec': 'h264', 'aformat': 'mp3', 'theme': 'dark', 'lang': 'ru', 'layout': 'wide', 'size': None, 'tray': True, 'tray_told': False, 'seen': '', 'net_mode': '', 'prores': '422', 'login': '', 'clip': True, 'proxy': '', 'cookies': '',
             'history': [], 'lnk': '', 'eq': [0] * 10, 'eq_mode': 'bands', 'eq_points': []}
 HISTORY_MAX = 40
 
@@ -108,6 +109,8 @@ def load():
         st['vcodec'] = 'h264'
     if st.get('prores') not in PRORES:
         st['prores'] = '422'
+    if st.get('login') not in BROWSER_NAMES:
+        st['login'] = ''
     if st.get('aformat') not in ACODECS:
         st['aformat'] = 'mp3'
     if st.get('theme') not in THEMES:
@@ -561,11 +564,24 @@ def ytdlp_cmd():
 NET_MODES = {'': [], 'ipv4': ['--force-ipv4'], 'chrome': ['--force-ipv4', '--impersonate', 'chrome'], 'curl': ['--force-ipv4', '--downloader', 'curl']}
 
 
+# YouTube иногда требует «подтвердить, что ты не бот»: так он отвечает на подозрительный адрес (часто из-за VPN).
+# Сначала пробуем зайти иначе сами: с другого адреса (IPv4/IPv6) и другим «клиентом» YouTube. Сработавший заход
+# держим до закрытия программы. Не помогло — человеку предлагается вход через его браузер, это снимает проверку надёжно.
+BOT = r"not a bot|sign in to confirm"
+BOT_WAYS = (['--force-ipv4'], ['--force-ipv6'], ['--extractor-args', 'youtube:player_client=tv,mweb'])
+COOKIE_FAIL = (r'could not (find|copy|read).{0,60}cookie|failed to (decrypt|load cookies)|cookie.{0,40}(database|locked)|'
+               r'permission denied.{0,80}cookies|dpapi|unsupported browser')
+SESSION = {'extra': []}
+BOT_HINT = 'YouTube просит подтвердить, что ты не бот. Выключи VPN, если он включён, или войди через браузер.'
+
+
 def net_args(st):
     a = ['--ffmpeg-location', os.path.dirname(tool_path('ffmpeg.exe'))] if have(TOOLS[1]) else []
     if st.get('proxy'):
         a += ['--proxy', st['proxy']]
-    return a + NET_MODES.get(st.get('net_mode') or '', [])
+    if st.get('login'):                     # человек сам, кнопкой, разрешил брать вход в YouTube из своего браузера.
+        a += ['--cookies-from-browser', st['login']]      # Старая настройка 'cookies' из прежних версий не используется
+    return a + NET_MODES.get(st.get('net_mode') or '', []) + list(st.get('extra', SESSION['extra']))
 
 
 def clip_parse(clip):
@@ -746,8 +762,7 @@ def renew(text):
 NET_ERRORS = (r'http error (403|429|5\d\d)|bytes read|more expected|incomplete|timed out|timeout|'
               r'connection (reset|aborted)|remote end closed|10054|10060|giving up after|ssl|record layer|impersonat')
 HINTS = (
-    (r'not a bot|sign in to confirm|login required|use --cookies', 'YouTube просит подтвердить, что ты не бот. '
-     'Попробуй позже или включи VPN либо прокси.'),
+    (r'not a bot|sign in to confirm|login required|use --cookies', BOT_HINT),
     (r'bytes read|more expected|incomplete', 'Соединение с YouTube обрывается на середине файла. Нажми «Повторить»: '
      'загрузка продолжится с того же места. Если обрывается раз за разом, попробуй качество пониже или VPN.'),
     (r'timed out|timeout|10060|10054|connection (reset|aborted|refused)|unable to connect|getaddrinfo|'
@@ -905,6 +920,19 @@ def run_job(job):
             code, err, tail, st = attempts(st)
         if blind():
             code, err = 1, 'в скачанном файле нет видеодорожки'
+        if code and job['status'] != 'cancel' and st.get('login') and re.search(COOKIE_FAIL, text()):
+            # вход из браузера не прочитался (обычно браузер открыт и держит файл): обычной загрузке это мешать не должно
+            job.update(pct=0, got=0, stage='Вход из браузера не прочитался, пробую без него', _nocookie=st['login'])
+            code, err, tail, st = attempts(dict(st, login=''))
+        if code and job['status'] != 'cancel' and re.search(BOT, text()):
+            for extra in BOT_WAYS:
+                job.update(pct=0, got=0, stage='YouTube проверяет, не бот ли я: захожу иначе')
+                code, err, tail = run_once(job, dict(st, extra=extra), False)
+                job['_log'] = job.get('_log', []) + ['=== заход иначе: ' + ' '.join(extra) + ' ===', *tail]
+                if not code:
+                    SESSION['extra'] = list(extra)      # этот заход YouTube пропустил: следующие загрузки начнут с него
+                if not code or job['status'] == 'cancel' or not re.search(BOT, text()):
+                    break
         if code and job['status'] != 'cancel' and not job.get('_renewed') and re.search(STALE, text()) and renew(text()):
             job.update(pct=0, got=0, stage='Компоненты обновлены, пробую снова', _renewed=True)
             code, err, tail, st = attempts(st)
@@ -936,7 +964,18 @@ def run_job(job):
         else:
             plain = [x for x in tail if x.strip() and not x.startswith(('[debug]', 'Traceback', '  File ', '    '))]
             raw = err or (plain[-1] if plain else f'yt-dlp завершился с кодом {code}')
-            job.update(status='error', stage='', error=explain(raw), raw=raw[:400])
+            base, ask = explain(raw), ''
+            if re.search(BOT, (raw + ' ' + ' '.join(tail[-40:])).lower()):     # проверка «не бот»: предложить вход через браузер
+                base, ask, raw = BOT_HINT, 'login', ''                        # простыню yt-dlp со ссылками не показываем, она в журнале
+                was = job.get('_nocookie') or load().get('login')
+                if job.get('_nocookie'):
+                    base = (f'Не получилось взять вход из {BROWSER_NAMES.get(was, was)}: закрой этот браузер и нажми «Повторить» '
+                            'или выбери другой. Надёжнее всего Firefox.')
+                elif was:
+                    base = (f'YouTube не принял вход из {BROWSER_NAMES.get(was, was)}. Открой в нём YouTube, войди в аккаунт '
+                            'и нажми «Повторить», или выбери другой браузер.')
+            same = bool(job.pop('_prev', '')) and job.get('_base') == base     # «Повторить» нажали, а ответ тот же: сказать об этом
+            job.update(status='error', stage='', error=('Повторил, ответ тот же. ' if same else '') + base, raw=raw[:400], ask=ask, _base=base)
             try:                            # журнал неудачи сохраняется сам: по нему видно, какие способы пробовались
                 LOG.write_text('\n'.join([job['url'], *job.get('_log', []), '=== итог ===', *tail]), 'utf-8')
             except OSError:
@@ -1131,7 +1170,7 @@ class Api:
         return {'version': SHOWN, 'updated': fresh, 'bands': list(EQ_BANDS), 'eq_max': EQ_MAX,
                 'pt': {'max': PT_MAX, 'gain': PT_GAIN, 'f': PT_F, 'q': PT_Q, 'soft': PT_SOFT, 'fs': FS,
                        'flat': CUT_FLAT, 'cutq': CUT_Q, 'steps': CUT_STEPS},
-                'settings': {k: st[k] for k in ('kind', 'quality', 'vcodec', 'prores', 'aformat', 'theme', 'lang', 'layout', 'tray', 'clip', 'proxy', 'cookies',
+                'settings': {k: st[k] for k in ('kind', 'quality', 'vcodec', 'prores', 'login', 'aformat', 'theme', 'lang', 'layout', 'tray', 'clip', 'proxy', 'cookies',
                                                 'eq', 'eq_mode', 'eq_points')},
                 'dir': str(out_dir(st)), **self.poll()}
 
@@ -1144,7 +1183,7 @@ class Api:
     def put(self, key, value):
         st = load()
         if key == 'kind' and value in ('video', 'audio') or key == 'quality' and value in QUALITIES \
-                or key == 'cookies' and value in BROWSERS or key == 'vcodec' and value in VCODECS or key == 'prores' and value in PRORES \
+                or key == 'cookies' and value in BROWSERS or key == 'vcodec' and value in VCODECS or key == 'prores' and value in PRORES or key == 'login' and (value == '' or value in BROWSER_NAMES) \
                 or key == 'aformat' and value in ACODECS or key == 'lang' and value in ('ru', 'en'):
             st[key] = value
         elif key == 'layout' and value in SIZES:
@@ -1197,7 +1236,7 @@ class Api:
             JOBS.insert(0, {'id': SEQ[0], 'url': url, 'kind': kind, 'clip': clip, 'quality': quality, 'title': known,
                             'af': eq_chain(st), 'vcodec': st['vcodec'], 'prores': st['prores'], 'aformat': st['aformat'],
                             'status': 'wait', 'stage': '', 'pct': 0, 'speed': None, 'eta': None, 'size': None,
-                            'file': '', 'error': '', 'raw': ''})
+                            'file': '', 'error': '', 'raw': '', 'ask': ''})
         WAKE.set()
         if not tools_view()['ready']:
             threading.Thread(target=prepare, daemon=True).start()
@@ -1217,9 +1256,20 @@ class Api:
         with LOCK:
             for j in JOBS:
                 if j['id'] == job_id and j['status'] in ('error', 'cancel'):
-                    j.update(status='wait', pct=0, error='', raw='', stage='', file='', post=False, note='')
+                    j.update(status='wait', pct=0, error='', raw='', stage='', file='', post=False, note='', ask='',
+                             _prev=j.get('_base') or 'x', _nocookie='')
         WAKE.set()
         return {'ok': True}
+
+    def login(self, job_id, browser):
+        """«Войти через браузер» на упавшей загрузке: запомнить выбранный браузер и повторить."""
+        if browser not in BROWSER_NAMES:
+            return {'error': 'Неизвестный браузер'}
+        st = load()
+        st['login'] = browser
+        save(st)
+        self.retry(job_id)
+        return {'ok': True, 'login': browser}
 
     def dismiss(self, job_id):
         with LOCK:
